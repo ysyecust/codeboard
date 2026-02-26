@@ -1133,7 +1133,52 @@ def cmd_grep(args):
     console.print(f"\n[dim]共 {len(all_results)} 个仓库, {total_matches} 条匹配[/dim]")
 
 
+GLOBAL_FLAGS = {"--path", "--sort", "--filter", "--json", "--watch"}
+# --sort/--path/--filter/--watch 后面跟一个值
+GLOBAL_FLAGS_WITH_VALUE = {"--path", "--sort", "--filter", "--watch"}
+
+
+def preprocess_argv(argv: list[str]) -> list[str]:
+    """将全局选项移到子命令之前，允许 `cb health --filter foo` 的用法"""
+    subcommands = {
+        "dashboard", "activity", "health", "detail", "stats",
+        "open", "dirty", "each", "pull", "push", "commit", "stash", "grep",
+    }
+    # 找到子命令位置
+    sub_idx = None
+    for i, arg in enumerate(argv):
+        if arg in subcommands:
+            sub_idx = i
+            break
+    if sub_idx is None:
+        return argv
+
+    before = argv[:sub_idx]
+    subcmd = argv[sub_idx]
+    after = argv[sub_idx + 1:]
+
+    # 从 after 中提取全局选项，移到 before
+    new_after = []
+    i = 0
+    while i < len(after):
+        arg = after[i]
+        if arg in GLOBAL_FLAGS:
+            before.append(arg)
+            if arg in GLOBAL_FLAGS_WITH_VALUE and i + 1 < len(after):
+                before.append(after[i + 1])
+                i += 2
+            else:
+                i += 1
+        else:
+            new_after.append(arg)
+            i += 1
+
+    return before + [subcmd] + new_after
+
+
 def main():
+    sys.argv[1:] = preprocess_argv(sys.argv[1:])
+
     parser = argparse.ArgumentParser(
         prog="codeboard",
         description="CodeBoard - 本地代码仓库仪表盘",
