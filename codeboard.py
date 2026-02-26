@@ -9,7 +9,7 @@ import signal
 import subprocess
 import sys
 import time
-from collections import Counter, defaultdict
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,8 +18,6 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from rich.columns import Columns
-from rich.bar import Bar
 from rich import box
 
 console = Console()
@@ -861,10 +859,14 @@ def cmd_pull(args):
     targets = [r for r in repos if r["remote_type"] != "none"]
 
     if not targets:
-        console.print("[dim]没有配置远程仓库的项目[/dim]")
+        if args.json:
+            print(json.dumps({"ok": [], "skip": [], "fail": []}, indent=2))
+        else:
+            console.print("[dim]没有配置远程仓库的项目[/dim]")
         return
 
-    console.print(f"[bold]准备 pull {len(targets)} 个有远程的仓库[/bold]\n")
+    if not args.json:
+        console.print(f"[bold]准备 pull {len(targets)} 个有远程的仓库[/bold]\n")
 
     results = {"ok": [], "skip": [], "fail": []}
 

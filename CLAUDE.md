@@ -6,7 +6,7 @@
 
 ```
 codemaster/
-  codeboard.py    # 单文件，全部逻辑 (~1100行)
+  codeboard.py    # 单文件，全部逻辑 (~1270行)
   CLAUDE.md       # 本文件
 ```
 
