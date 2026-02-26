@@ -1,12 +1,12 @@
 # CodeBoard
 
-本地代码仓库仪表盘 CLI 工具。扫描 `~/Code` 下所有 git 仓库，展示开发状态、活跃度、健康状况，并与 lazygit 联动进行快速操作。
+本地代码仓库仪表盘 CLI 工具。扫描 `~/Code` 下所有 git 仓库，展示开发状态、活跃度、健康状况，并提供批量操作与 lazygit 联动能力。
 
 ## 项目结构
 
 ```
 codemaster/
-  codeboard.py    # 单文件，全部逻辑 (~920行)
+  codeboard.py    # 单文件，全部逻辑 (~1100行)
   CLAUDE.md       # 本文件
 ```
 
@@ -21,11 +21,21 @@ codemaster/
 ### 子命令一览
 
 ```bash
+# ── 查看 ──
 cb                        # 主仪表盘 (默认)，按活跃度排序
 cb activity [--limit N]   # 跨仓库提交时间线，默认 30 条
 cb health                 # 健康检查：未提交/未推送/落后远程/无远程/不活跃
 cb detail <repo>          # 单仓库详情：语言占比/贡献者/标签/活跃度曲线
 cb stats                  # 汇总统计：语言分布/本周Top/远程分布
+cb grep <pattern>         # 跨所有仓库搜索代码内容
+
+# ── 操作 ──
+cb pull                   # 批量 git pull 所有有远程的仓库 (--ff-only)
+cb push                   # 推送所有有 ahead 提交的仓库 (需确认)
+cb commit <repo> -m "msg" # 快速 add+commit 指定仓库 (需确认，-y 跳过)
+cb stash <repo> [push|pop|list] [-m "msg"]  # 快速 stash 操作
+
+# ── lazygit 联动 ──
 cb open <repo> [panel]    # lazygit 打开仓库，panel 可选 status/branch/log/stash
 cb dirty                  # 列出脏仓库，交互选择后 lazygit 打开
 cb each                   # 逐个 lazygit 处理所有脏仓库
@@ -51,6 +61,12 @@ cb --watch 10               # 10 秒刷新的实时监控
 cb --json | jq '.[]'        # 管道处理
 cb open quant log           # lazygit 直接看 quant 的提交历史
 cb each --filter simona     # 逐个处理 simona 相关脏仓库
+cb grep "TODO" --filter simona  # 在 simona 系列中搜索 TODO
+cb pull                     # 一键拉取所有仓库
+cb push                     # 推送所有有 ahead 的仓库
+cb commit quant -m "feat: xxx" -y  # 快速提交
+cb stash quant              # 暂存 quant 的变更
+cb stash quant pop          # 恢复暂存
 ```
 
 ## 架构设计
@@ -67,6 +83,19 @@ main() → argparse 解析 → handler(args)
                     sort_repos() → rich 渲染输出
 ```
 
+### 命令分类
+
+```
+查看类 (只读)     操作类 (写入)      lazygit 联动
+─────────────     ──────────────     ─────────────
+dashboard         pull               open
+activity          push               dirty
+health            commit             each
+detail            stash
+stats
+grep
+```
+
 ### 性能关键决策
 
 1. **单次 shell 调用**: `scan_repo()` 用 `SCAN_SCRIPT_BASE/FULL` 把 6-9 条 git 命令合并为 1 个 `sh -c` 调用，通过 `%%TAG%%` 标记解析输出
@@ -74,17 +103,24 @@ main() → argparse 解析 → handler(args)
 3. **延迟语言检测**: `full=False` 时跳过 `git ls-files`，health/dirty 等不需要语言信息的命令更快
 4. **43 仓库全量扫描 ~1 秒**
 
+### 安全设计
+
+- `pull` 使用 `--ff-only`，不会产生 merge commit
+- `push` 和 `commit` 默认需要用户确认（commit 可用 `-y` 跳过）
+- `stash` 默认 `--include-untracked`，不会丢失文件
+- 所有写操作都有明确的执行反馈（✓ 成功 / ✗ 失败 + 原因）
+
 ### 关键函数
 
-| 函数 | 位置 | 作用 |
-|------|------|------|
-| `scan_repo(path, full)` | L178 | 单仓库信息提取，核心函数 |
-| `scan_all(dir, full, filter)` | L270 | 并行扫描入口 |
-| `SCAN_SCRIPT_BASE/FULL` | L163 | shell 脚本模板，合并 git 调用 |
-| `find_repo(dir, name)` | L746 | 仓库名模糊匹配 |
-| `relative_time(dt)` | L86 | datetime → 中文相对时间 |
-| `detect_remote_type(url)` | L113 | remote URL → github/gitlab/gitee/... |
-| `LANG_MAP` / `IGNORE_EXTS` | L29/L64 | 文件扩展名 → 语言映射 & 忽略列表 |
+| 函数 | 作用 |
+|------|------|
+| `scan_repo(path, full)` | 单仓库信息提取，核心函数 |
+| `scan_all(dir, full, filter)` | 并行扫描入口 |
+| `SCAN_SCRIPT_BASE/FULL` | shell 脚本模板，合并 git 调用 |
+| `find_repo(dir, name)` | 仓库名模糊匹配 |
+| `relative_time(dt)` | datetime → 中文相对时间 |
+| `detect_remote_type(url)` | remote URL → github/gitlab/gitee/... |
+| `LANG_MAP` / `IGNORE_EXTS` | 文件扩展名 → 语言映射 & 忽略列表 |
 
 ### scan_repo 返回的 dict 结构
 
@@ -113,6 +149,7 @@ main() → argparse 解析 → handler(args)
 - **无状态**: 不使用缓存、数据库、配置文件，每次运行实时扫描
 - **输出用 rich**: 表格用 `Table`，面板用 `Panel`，着色用 `Text`
 - **新子命令模式**: 写 `cmd_xxx(args)` 函数 → 注册到 `main()` 的 `commands` dict 和 `argparse` 子解析器
+- **写操作需确认**: push/commit 等写操作默认询问用户确认
 - **lazygit 联动**: 用 `os.execvp` 替换当前进程 (open)，用 `subprocess.run` 串行调用 (each)
 - **错误处理**: git 命令超时/失败静默返回空字符串，不中断整体扫描
 

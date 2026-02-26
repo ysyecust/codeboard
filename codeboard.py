@@ -854,6 +854,285 @@ def cmd_each(args):
     console.print("\n[green]全部处理完毕[/green]")
 
 
+def cmd_pull(args):
+    """批量 git pull"""
+    code_dir = Path(args.path).expanduser()
+    repos = scan_all(code_dir, full=False, filter_kw=args.filter)
+    targets = [r for r in repos if r["remote_type"] != "none"]
+
+    if not targets:
+        console.print("[dim]没有配置远程仓库的项目[/dim]")
+        return
+
+    console.print(f"[bold]准备 pull {len(targets)} 个有远程的仓库[/bold]\n")
+
+    results = {"ok": [], "skip": [], "fail": []}
+
+    def do_pull(repo_info):
+        path = Path(repo_info["path"])
+        try:
+            r = subprocess.run(
+                ["git", "-C", str(path), "pull", "--ff-only"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if r.returncode == 0:
+                out = r.stdout.strip()
+                if "Already up to date" in out or "已经是最新" in out:
+                    return ("skip", repo_info, "")
+                return ("ok", repo_info, out.split("\n")[-1])
+            return ("fail", repo_info, r.stderr.strip().split("\n")[0])
+        except subprocess.TimeoutExpired:
+            return ("fail", repo_info, "timeout")
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(do_pull, r): r for r in targets}
+        for f in as_completed(futures):
+            status, repo_info, msg = f.result()
+            results[status].append((repo_info, msg))
+
+    if args.json:
+        out = {k: [{"name": r["name"], "message": m} for r, m in v] for k, v in results.items()}
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return
+
+    if results["ok"]:
+        console.print(f"[green]  ✓ 已更新 ({len(results['ok'])})[/green]")
+        for r, msg in sorted(results["ok"], key=lambda x: x[0]["name"]):
+            console.print(f"    [cyan]{r['name']}[/cyan] {msg}")
+
+    if results["fail"]:
+        console.print(f"[red]  ✗ 失败 ({len(results['fail'])})[/red]")
+        for r, msg in sorted(results["fail"], key=lambda x: x[0]["name"]):
+            console.print(f"    [cyan]{r['name']}[/cyan] [dim]{msg}[/dim]")
+
+    skipped = len(results["skip"])
+    if skipped:
+        console.print(f"[dim]  ─ 已是最新 ({skipped})[/dim]")
+
+
+def cmd_push(args):
+    """推送所有有 ahead 提交的仓库"""
+    code_dir = Path(args.path).expanduser()
+    repos = scan_all(code_dir, full=False, filter_kw=args.filter)
+    targets = [r for r in repos if r["ahead"] > 0]
+
+    if not targets:
+        console.print("[green]没有需要推送的仓库[/green]")
+        return
+
+    targets.sort(key=lambda r: r["ahead"], reverse=True)
+
+    if args.json:
+        print(json.dumps([{"name": r["name"], "ahead": r["ahead"]} for r in targets], ensure_ascii=False, indent=2))
+        return
+
+    table = Table(box=box.SIMPLE, show_header=True, padding=(0, 1))
+    table.add_column("仓库", style="bold cyan")
+    table.add_column("分支", style="magenta")
+    table.add_column("未推送", style="yellow", justify="right")
+    table.add_column("远程", style="dim")
+
+    for r in targets:
+        table.add_row(r["name"], r["branch"], f"↑{r['ahead']}", r["remote_type"])
+
+    console.print(table)
+    console.print(f"\n[bold]确认推送以上 {len(targets)} 个仓库? [y/N][/bold]")
+    try:
+        choice = input("> ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if choice not in ("y", "yes"):
+        console.print("[dim]已取消[/dim]")
+        return
+
+    for r in targets:
+        path = Path(r["path"])
+        result = subprocess.run(
+            ["git", "-C", str(path), "push"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            console.print(f"  [green]✓[/green] {r['name']}")
+        else:
+            err = result.stderr.strip().split("\n")[0]
+            console.print(f"  [red]✗[/red] {r['name']} [dim]{err}[/dim]")
+
+    console.print("\n[green]推送完成[/green]")
+
+
+def cmd_commit(args):
+    """快速 commit 指定仓库"""
+    code_dir = Path(args.path).expanduser()
+    repo_path = find_repo(code_dir, args.repo)
+    if not repo_path:
+        return
+
+    message = args.message
+    if not message:
+        console.print("[red]缺少提交信息，请用 -m 指定[/red]")
+        return
+
+    # 先看看有什么变更
+    status = run_git(repo_path, "status", "--porcelain")
+    if not status:
+        console.print(f"[green]{repo_path.name}: 工作区干净，无需提交[/green]")
+        return
+
+    lines = status.split("\n")
+    console.print(f"[bold]{repo_path.name}[/bold] — {len(lines)} 个变更文件:")
+    for line in lines[:10]:
+        flag = line[:2]
+        fname = line[3:]
+        if flag.strip() == "??":
+            console.print(f"  [green]+ {fname}[/green]")
+        elif "D" in flag:
+            console.print(f"  [red]- {fname}[/red]")
+        else:
+            console.print(f"  [yellow]~ {fname}[/yellow]")
+    if len(lines) > 10:
+        console.print(f"  [dim]... 还有 {len(lines) - 10} 个文件[/dim]")
+
+    if not args.yes:
+        console.print(f'\n[bold]提交信息:[/bold] "{message}"')
+        console.print("[bold]确认 git add -A && commit? [y/N][/bold]")
+        try:
+            choice = input("> ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return
+        if choice not in ("y", "yes"):
+            console.print("[dim]已取消[/dim]")
+            return
+
+    # git add -A && git commit
+    run_git(repo_path, "add", "-A")
+    result = subprocess.run(
+        ["git", "-C", str(repo_path), "commit", "-m", message],
+        capture_output=True, text=True, timeout=15,
+    )
+    if result.returncode == 0:
+        console.print(f"[green]✓ 已提交[/green]")
+    else:
+        console.print(f"[red]✗ 提交失败:[/red] {result.stderr.strip()}")
+
+
+def cmd_stash(args):
+    """快速 stash 指定仓库"""
+    code_dir = Path(args.path).expanduser()
+    repo_path = find_repo(code_dir, args.repo)
+    if not repo_path:
+        return
+
+    action = getattr(args, "action", "push") or "push"
+
+    if action == "push":
+        status = run_git(repo_path, "status", "--porcelain")
+        if not status:
+            console.print(f"[green]{repo_path.name}: 工作区干净，无需 stash[/green]")
+            return
+        dirty_n = len(status.split("\n"))
+        msg = getattr(args, "message", None)
+        cmd_args = ["stash", "push", "--include-untracked"]
+        if msg:
+            cmd_args.extend(["-m", msg])
+        result = subprocess.run(
+            ["git", "-C", str(repo_path)] + cmd_args,
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0:
+            console.print(f"[green]✓ {repo_path.name}: stash 了 {dirty_n} 个变更[/green]")
+        else:
+            console.print(f"[red]✗ stash 失败:[/red] {result.stderr.strip()}")
+
+    elif action == "pop":
+        result = subprocess.run(
+            ["git", "-C", str(repo_path), "stash", "pop"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0:
+            console.print(f"[green]✓ {repo_path.name}: stash pop 成功[/green]")
+        else:
+            console.print(f"[red]✗ stash pop 失败:[/red] {result.stderr.strip()}")
+
+    elif action == "list":
+        out = run_git(repo_path, "stash", "list")
+        if out:
+            console.print(f"[bold]{repo_path.name} stash 列表:[/bold]")
+            for line in out.split("\n"):
+                console.print(f"  {line}")
+        else:
+            console.print(f"[dim]{repo_path.name}: 没有 stash[/dim]")
+
+
+def cmd_grep(args):
+    """跨仓库代码搜索"""
+    code_dir = Path(args.path).expanduser()
+    pattern = args.pattern
+    repos = sorted(
+        [d for d in code_dir.iterdir() if d.is_dir() and (d / ".git").is_dir()],
+        key=lambda p: p.name.lower(),
+    )
+    if args.filter:
+        repos = [r for r in repos if args.filter.lower() in r.name.lower()]
+
+    all_results = []
+
+    def search_repo(repo_path: Path):
+        try:
+            r = subprocess.run(
+                ["git", "-C", str(repo_path), "grep", "-n", "--color=never",
+                 "-I",  # skip binary
+                 "-l" if args.json else "-n",
+                 pattern],
+                capture_output=True, text=True, timeout=15,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                return (repo_path.name, r.stdout.strip())
+        except subprocess.TimeoutExpired:
+            pass
+        return None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(search_repo, r): r for r in repos}
+        for f in as_completed(futures):
+            result = f.result()
+            if result:
+                all_results.append(result)
+
+    all_results.sort(key=lambda x: x[0].lower())
+
+    if not all_results:
+        console.print(f"[dim]未找到匹配: {pattern}[/dim]")
+        return
+
+    if args.json:
+        out = {}
+        for repo_name, files in all_results:
+            out[repo_name] = files.split("\n")
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return
+
+    total_matches = 0
+    for repo_name, output in all_results:
+        lines = output.split("\n")
+        total_matches += len(lines)
+        console.print(f"\n[bold cyan]{repo_name}[/bold cyan] [dim]({len(lines)} matches)[/dim]")
+        shown = lines[:8]
+        for line in shown:
+            # line format: "file:line:content"
+            if ":" in line:
+                parts = line.split(":", 2)
+                if len(parts) >= 3:
+                    console.print(f"  [dim]{parts[0]}:{parts[1]}[/dim] {parts[2].strip()}")
+                else:
+                    console.print(f"  {line}")
+            else:
+                console.print(f"  {line}")
+        if len(lines) > 8:
+            console.print(f"  [dim]... 还有 {len(lines) - 8} 条[/dim]")
+
+    console.print(f"\n[dim]共 {len(all_results)} 个仓库, {total_matches} 条匹配[/dim]")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="codeboard",
@@ -884,6 +1163,23 @@ def main():
     sub.add_parser("dirty", help="列出脏仓库，选择后用 lazygit 打开")
     sub.add_parser("each", help="逐个 lazygit 处理所有脏仓库")
 
+    # 操作命令
+    sub.add_parser("pull", help="批量 git pull 所有有远程的仓库")
+    sub.add_parser("push", help="推送所有有 ahead 提交的仓库")
+
+    commit_parser = sub.add_parser("commit", help="快速 commit 指定仓库")
+    commit_parser.add_argument("repo", help="仓库名称")
+    commit_parser.add_argument("-m", "--message", required=True, help="提交信息")
+    commit_parser.add_argument("-y", "--yes", action="store_true", help="跳过确认")
+
+    stash_parser = sub.add_parser("stash", help="快速 stash 指定仓库")
+    stash_parser.add_argument("repo", help="仓库名称")
+    stash_parser.add_argument("action", nargs="?", choices=["push", "pop", "list"], default="push", help="stash 操作 (默认 push)")
+    stash_parser.add_argument("-m", "--message", help="stash 备注")
+
+    grep_parser = sub.add_parser("grep", help="跨仓库代码搜索")
+    grep_parser.add_argument("pattern", help="搜索模式 (正则)")
+
     args = parser.parse_args()
 
     cmd = args.command or "dashboard"
@@ -897,6 +1193,11 @@ def main():
         "open": cmd_open,
         "dirty": cmd_dirty,
         "each": cmd_each,
+        "pull": cmd_pull,
+        "push": cmd_push,
+        "commit": cmd_commit,
+        "stash": cmd_stash,
+        "grep": cmd_grep,
     }
 
     handler = commands.get(cmd)
