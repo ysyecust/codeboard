@@ -1192,6 +1192,8 @@ def _parse_md_table(raw: str) -> list[list[str]]:
         data = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         return []
+    if not isinstance(data, dict):
+        return []
     md = data.get("markdown", "")
     rows = []
     header_skipped = False
@@ -1210,6 +1212,27 @@ def _parse_md_table(raw: str) -> list[list[str]]:
         if cells:
             rows.append(cells)
     return rows
+
+
+def _bar_chart_text(items: list[tuple[str, int]], max_width: int = 20) -> str:
+    """生成文本柱状图行, 如 'Function   850 ███████████'"""
+    if not items:
+        return ""
+    max_val = max(v for _, v in items) or 1
+    max_label = max(len(label) for label, _ in items)
+    lines = []
+    for label, val in items:
+        bar_len = val * max_width // max_val or (1 if val > 0 else 0)
+        lines.append(f"    {label:<{max_label}}  {val:>6} {'█' * bar_len}")
+    return "\n".join(lines)
+
+
+def _module_prefix(filepath: str) -> str:
+    """提取文件路径首段目录: 'include/foo/bar.hpp' → 'include'"""
+    if not filepath:
+        return "(root)"
+    parts = filepath.replace("\\", "/").split("/")
+    return parts[0] if len(parts) > 1 else "(root)"
 
 
 def _graph_require(args) -> tuple[str, Path, str] | None:
@@ -1246,7 +1269,7 @@ def cmd_graph_index(args):
     console.print(f"[bold]索引: {repo_name}[/bold] → {repo_path}\n")
     try:
         # 直接输出到终端，让用户看到进度
-        r = subprocess.run([gn, "index", str(repo_path)], timeout=180)
+        r = subprocess.run([gn, "analyze", str(repo_path)], timeout=180)
         if r.returncode == 0:
             console.print(f"\n[green]✓ 索引完成: {repo_name}[/green]")
         else:
@@ -1558,6 +1581,607 @@ def cmd_graph_community(args):
     console.print(f"\n[dim]共 {len(communities)} 个社区[/dim]")
 
 
+def cmd_graph_modules(args):
+    """显示模块文件分布"""
+    result = _graph_require(args)
+    if not result:
+        return
+    gn, repo_path, repo_name = result
+    if not is_graph_indexed(repo_path):
+        console.print(f"[yellow]尚未建立图索引，请先运行: cb graph {repo_name} index[/yellow]")
+        return
+    ok, out = run_gitnexus(gn, "cypher", "MATCH (f:File) RETURN f.filePath AS path", "--repo", repo_name)
+    if not ok or not out:
+        console.print("[red]查询失败[/red]")
+        return
+    if getattr(args, "json", False):
+        print(out)
+        return
+    rows = _parse_md_table(out)
+    if not rows:
+        console.print("[dim]无文件节点[/dim]")
+        return
+    counter = Counter()
+    for r in rows:
+        if r:
+            counter[_module_prefix(r[0])] += 1
+    total = sum(counter.values())
+    sorted_mods = counter.most_common()
+    tbl = Table(title=f"{repo_name} — 模块文件分布", box=box.SIMPLE, show_header=True, padding=(0, 1))
+    tbl.add_column("模块", style="bold cyan", no_wrap=True)
+    tbl.add_column("文件数", style="bold yellow", justify="right")
+    tbl.add_column("占比", style="dim", justify="right")
+    tbl.add_column("", style="green")
+    max_count = sorted_mods[0][1] if sorted_mods else 1
+    for mod, count in sorted_mods:
+        pct = f"{count * 100 // total}%"
+        bar = "█" * (count * 20 // max_count)
+        tbl.add_row(mod, str(count), pct, bar)
+    console.print(tbl)
+    console.print(f"\n[dim]共 {total} 个文件, {len(sorted_mods)} 个模块[/dim]")
+
+
+def cmd_graph_hubs(args):
+    """显示高引用度符号"""
+    result = _graph_require(args)
+    if not result:
+        return
+    gn, repo_path, repo_name = result
+    if not is_graph_indexed(repo_path):
+        console.print(f"[yellow]尚未建立图索引，请先运行: cb graph {repo_name} index[/yellow]")
+        return
+
+    def _query_hubs(label):
+        return run_gitnexus(gn, "cypher",
+            f"MATCH (a)-[r:CodeRelation]->(b:{label}) "
+            f"RETURN b.name AS symbol, b.filePath AS file, count(*) AS refs "
+            f"ORDER BY refs DESC LIMIT 15",
+            "--repo", repo_name)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_fn = pool.submit(_query_hubs, "Function")
+        fut_cls = pool.submit(_query_hubs, "Class")
+        ok_fn, out_fn = fut_fn.result()
+        ok_cls, out_cls = fut_cls.result()
+
+    if getattr(args, "json", False):
+        print(json.dumps({"functions": out_fn, "classes": out_cls}, ensure_ascii=False))
+        return
+
+    tbl = Table(title=f"{repo_name} — Hub Nodes", box=box.SIMPLE, show_header=True, padding=(0, 1))
+    tbl.add_column("符号", style="bold cyan", no_wrap=True)
+    tbl.add_column("文件", style="dim")
+    tbl.add_column("引用数", style="bold yellow", justify="right")
+    tbl.add_column("类型", style="magenta")
+    count = 0
+    for label, ok, out in [("Function", ok_fn, out_fn), ("Class", ok_cls, out_cls)]:
+        if ok and out:
+            for r in _parse_md_table(out):
+                if len(r) >= 3:
+                    tbl.add_row(r[0], r[1], r[2], label)
+                    count += 1
+    if count == 0:
+        console.print("[dim]无数据[/dim]")
+    else:
+        console.print(tbl)
+        console.print(f"\n[dim]{count} 个高引用符号[/dim]")
+
+
+def cmd_graph_hierarchy(args):
+    """显示类继承关系"""
+    from rich.tree import Tree as RichTree
+    result = _graph_require(args)
+    if not result:
+        return
+    gn, repo_path, repo_name = result
+    if not is_graph_indexed(repo_path):
+        console.print(f"[yellow]尚未建立图索引，请先运行: cb graph {repo_name} index[/yellow]")
+        return
+    ok, out = run_gitnexus(gn, "cypher",
+        "MATCH (a:Class)-[r:CodeRelation {type: 'EXTENDS'}]->(b:Class) "
+        "RETURN a.name AS child, b.name AS parent, a.filePath AS file",
+        "--repo", repo_name)
+    if not ok or not out:
+        console.print("[red]查询失败[/red]")
+        return
+    if getattr(args, "json", False):
+        print(out)
+        return
+    rows = _parse_md_table(out)
+    if not rows:
+        console.print("[dim]无类继承关系[/dim]")
+        return
+    parent_map: dict[str, list[tuple[str, str]]] = {}
+    for r in rows:
+        if len(r) >= 3:
+            parent_map.setdefault(r[1], []).append((r[0], r[2]))
+    tree = RichTree(f"[bold]{repo_name}[/bold] — 类继承", guide_style="dim")
+    for parent, children in sorted(parent_map.items(), key=lambda x: -len(x[1])):
+        branch = tree.add(f"[bold cyan]{parent}[/bold cyan] ({len(children)} 子类)")
+        for child, fpath in children:
+            branch.add(f"{child} [dim]{fpath}[/dim]")
+    console.print(tree)
+    console.print(f"\n[dim]{len(rows)} 条继承关系, {len(parent_map)} 个基类[/dim]")
+
+
+def cmd_graph_report(args):
+    """生成 Obsidian 代码图谱文档"""
+    result = _graph_require(args)
+    if not result:
+        return
+    gn, repo_path, repo_name = result
+    if not is_graph_indexed(repo_path):
+        console.print(f"[yellow]尚未建立图索引，请先运行: cb graph {repo_name} index[/yellow]")
+        return
+
+    console.print(f"[bold]生成代码图谱: {repo_name}[/bold]\n")
+
+    # 索引时间
+    gn_dir = repo_path / ".gitnexus"
+    try:
+        idx_time_str = datetime.fromtimestamp(gn_dir.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        idx_time_str = "未知"
+
+    # 并行 Cypher 查询 — 18 条
+    queries = {
+        "nodes": "MATCH (n) RETURN labels(n) AS type, count(*) AS cnt ORDER BY cnt DESC",
+        "edges": "MATCH ()-[r:CodeRelation]->() RETURN r.type AS edgeType, count(*) AS cnt ORDER BY cnt DESC",
+        "communities": "MATCH (c:Community) RETURN c.id AS cid, c.label AS clabel, c.symbolCount AS symbols, c.cohesion AS coh ORDER BY c.symbolCount DESC LIMIT 20",
+        "inheritance": "MATCH (a:Class)-[r:CodeRelation {type: 'EXTENDS'}]->(b:Class) RETURN a.name AS child, b.name AS parent, a.filePath AS file",
+        "hub_fn": "MATCH (a)-[r:CodeRelation]->(b:Function) RETURN b.name AS symbol, b.filePath AS file, count(*) AS refs ORDER BY refs DESC LIMIT 20",
+        "hub_class": "MATCH (a)-[r:CodeRelation]->(b:Class) RETURN b.name AS symbol, b.filePath AS file, count(*) AS refs ORDER BY refs DESC LIMIT 10",
+        "files": "MATCH (f:File) RETURN f.filePath AS path",
+        "namespaces": "MATCH (n:Namespace) RETURN DISTINCT n.name AS ns ORDER BY ns",
+        "structs": "MATCH (s:Struct) RETURN s.name AS sname, s.filePath AS file ORDER BY s.name LIMIT 50",
+        "processes": "MATCH (p:Process) RETURN count(*) AS n",
+        "top_callers": "MATCH (a:Function)-[r:CodeRelation {type: 'CALLS'}]->(b) RETURN a.name AS caller, a.filePath AS file, count(*) AS calls ORDER BY calls DESC LIMIT 15",
+        "cross_deps": "MATCH (a:Function)-[r:CodeRelation {type: 'CALLS'}]->(b:Function) WHERE a.filePath <> b.filePath RETURN a.filePath AS src, b.filePath AS dst, count(*) AS weight ORDER BY weight DESC LIMIT 20",
+        "enums": "MATCH (e:Enum) RETURN e.name AS ename, e.filePath AS file ORDER BY e.name LIMIT 30",
+        "imports": "MATCH (a:File)-[r:CodeRelation {type: 'IMPORTS'}]->(b:File) RETURN a.filePath AS src, b.filePath AS dst ORDER BY a.filePath LIMIT 40",
+        "comm_count": "MATCH (c:Community) RETURN count(*) AS n",
+        "proc_steps": "MATCH (s)-[r:CodeRelation {type: 'STEP_IN_PROCESS'}]->(p:Process) RETURN p.id, p.heuristicLabel, p.processType, p.stepCount, s.name, s.filePath, r.step ORDER BY p.stepCount DESC, p.id, r.step",
+        "comm_members": "MATCH (s)-[r:CodeRelation {type: 'MEMBER_OF'}]->(c:Community) WHERE c.symbolCount >= 5 RETURN c.id, c.heuristicLabel, c.symbolCount, c.cohesion, s.name, labels(s)[0] AS kind, s.filePath ORDER BY c.symbolCount DESC, c.id, s.name LIMIT 300",
+        "file_defs": "MATCH (f:File)-[r:CodeRelation {type: 'DEFINES'}]->(s) RETURN f.filePath AS file, s.name AS symbol, labels(s)[0] AS kind ORDER BY f.filePath, s.name LIMIT 500",
+    }
+    results: dict[str, list[list[str]]] = {}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(run_gitnexus, gn, "cypher", q, "--repo", repo_name): key
+                   for key, q in queries.items()}
+        for fut in as_completed(futures):
+            key = futures[fut]
+            ok, out = fut.result()
+            results[key] = _parse_md_table(out) if ok and out else []
+            console.print(f"  [dim]✓ {key}[/dim]")
+
+    # 数据提取
+    node_data = [(r[0].strip("[]'\""), int(r[1])) for r in results.get("nodes", []) if len(r) >= 2 and r[1].isdigit()]
+    edge_data = [(r[0], int(r[1])) for r in results.get("edges", []) if len(r) >= 2 and r[1].isdigit()]
+    communities = results.get("communities", [])
+    inheritance = results.get("inheritance", [])
+    hub_fns = results.get("hub_fn", [])
+    hub_classes = results.get("hub_class", [])
+    file_paths = results.get("files", [])
+    namespaces = [r[0] for r in results.get("namespaces", []) if r]
+    structs = results.get("structs", [])
+    enums = results.get("enums", [])
+    proc_rows = results.get("processes", [])
+    top_callers = results.get("top_callers", [])
+    cross_deps = results.get("cross_deps", [])
+    imports = results.get("imports", [])
+    comm_count_rows = results.get("comm_count", [])
+
+    # ── 新增: 流程步骤分组 (proc_steps) ──
+    proc_step_rows = results.get("proc_steps", [])
+    proc_groups: dict[str, dict] = {}  # p.id -> {label, type, stepCount, steps: [(name, file, step)]}
+    for r in proc_step_rows:
+        if len(r) >= 7:
+            pid, plabel, ptype, psteps, sname, sfile, step_num = r[0], r[1], r[2], r[3], r[4], r[5], r[6]
+            if pid not in proc_groups:
+                proc_groups[pid] = {"label": plabel, "type": ptype, "stepCount": int(psteps) if psteps.isdigit() else 0, "steps": []}
+            try:
+                step_int = int(step_num)
+            except (ValueError, TypeError):
+                step_int = 999
+            proc_groups[pid]["steps"].append((sname, sfile, step_int))
+    # 排序: stepCount 降序, cross_community 优先
+    for pg in proc_groups.values():
+        pg["steps"].sort(key=lambda x: x[2])
+    proc_sorted = sorted(proc_groups.items(), key=lambda x: (0 if x[1]["type"] == "cross_community" else 1, -x[1]["stepCount"]))
+
+    # ── 新增: 社区成员分组 (comm_members) ──
+    comm_member_rows = results.get("comm_members", [])
+    comm_detail: dict[str, dict] = {}  # c.id -> {label, symbolCount, cohesion, members: [(name, kind, file)]}
+    for r in comm_member_rows:
+        if len(r) >= 7:
+            cid, clabel, csymbols, ccoh, sname, skind, sfile = r[0], r[1], r[2], r[3], r[4], r[5], r[6]
+            if cid not in comm_detail:
+                comm_detail[cid] = {"label": clabel, "symbolCount": int(csymbols) if csymbols.isdigit() else 0, "cohesion": ccoh, "members": []}
+            comm_detail[cid]["members"].append((sname, skind.strip("[]'\""), sfile))
+
+    # ── 新增: 文件符号索引 (file_defs) ──
+    file_def_rows = results.get("file_defs", [])
+    file_def_map: dict[str, list[tuple[str, str]]] = {}  # file -> [(symbol, kind)]
+    for r in file_def_rows:
+        if len(r) >= 3:
+            fpath, sym, kind = r[0], r[1], r[2].strip("[]'\"")
+            file_def_map.setdefault(fpath, []).append((sym, kind))
+
+    total_nodes = sum(v for _, v in node_data)
+    total_edges = sum(v for _, v in edge_data)
+    total_communities = int(comm_count_rows[0][0]) if comm_count_rows and comm_count_rows[0] else len(communities)
+    n_processes = int(proc_rows[0][0]) if proc_rows and proc_rows[0] else 0
+    total_files = len(file_paths)
+
+    # 模块分布
+    mod_counter = Counter()
+    for r in file_paths:
+        if r:
+            mod_counter[_module_prefix(r[0])] += 1
+    module_dist = mod_counter.most_common()
+
+    # 检测主要语言 (用于上下文描述)
+    lang = ""
+    try:
+        r = subprocess.run(["git", "-C", str(repo_path), "log", "-1", "--format=%s"], capture_output=True, text=True, timeout=5)
+        # 用文件扩展名检测
+        ext_counter: Counter = Counter()
+        for row in file_paths:
+            if row and "." in row[0]:
+                ext_counter[row[0].rsplit(".", 1)[-1].lower()] += 1
+        top_ext = ext_counter.most_common(3)
+        ext_to_lang = {"py": "Python", "c": "C", "cpp": "C++", "h": "C/C++", "hpp": "C++",
+                       "js": "JavaScript", "ts": "TypeScript", "go": "Go", "rs": "Rust", "java": "Java"}
+        for ext, _ in top_ext:
+            if ext in ext_to_lang:
+                lang = ext_to_lang[ext]
+                break
+    except Exception:
+        pass
+
+    # ====== 组装 Markdown ======
+    md = []
+    md.append(f"# {repo_name} 代码图谱\n")
+    md.append(f"> [!info] 数据来源")
+    md.append(f"> 由 [GitNexus](https://github.com/nicobailon/gitnexus) 知识图谱引擎自动生成。")
+    md.append(f"> 重新生成: `cb graph {repo_name} report`")
+    md.append(f">")
+    md.append(f"> | 指标 | 值 |")
+    md.append(f"> |------|-----|")
+    md.append(f"> | 节点 | **{total_nodes:,}** |")
+    md.append(f"> | 边 | **{total_edges:,}** |")
+    md.append(f"> | 社区 | **{total_communities}** (Leiden 聚类) |")
+    md.append(f"> | 流程 | **{n_processes}** |")
+    md.append(f"> | 文件 | **{total_files}** |")
+    md.append(f"> | 索引时间 | {idx_time_str} |")
+    md.append(f">")
+    md.append(f"> 相关文档: [[{repo_name}]]")
+    md.append("\n---\n")
+
+    # ── 概览 ──
+    md.append("## 图谱总览\n")
+    md.append(f"知识图谱包含 **{total_nodes:,}** 个节点和 **{total_edges:,}** 条边，覆盖 {total_files} 个源文件。")
+    if node_data:
+        top3 = ", ".join(f"{t} ({c:,})" for t, c in node_data[:3])
+        md.append(f"节点主要由 {top3} 组成。")
+    md.append("")
+    node_bars = _bar_chart_text(node_data[:10])
+    edge_bars = _bar_chart_text(edge_data[:8])
+    md.append("```")
+    md.append(f"    节点类型分布")
+    md.append(f"    ─────────────")
+    md.append(node_bars)
+    md.append(f"\n    边类型分布")
+    md.append(f"    ─────────────")
+    md.append(edge_bars)
+    md.append("```\n")
+
+    # ── 模块饼图 + 表格 ──
+    if module_dist:
+        pie_items = "\n".join(f'    "{mod} ({cnt})" : {cnt}' for mod, cnt in module_dist[:12])
+        md.append("## 模块文件分布\n")
+        md.append("```mermaid")
+        md.append("pie title 文件数按模块")
+        md.append(pie_items)
+        md.append("```\n")
+        md.append("| 模块 | 文件数 | 占比 |")
+        md.append("|------|--------|------|")
+        for mod, cnt in module_dist:
+            pct = cnt * 100 // total_files if total_files else 0
+            md.append(f"| `{mod}` | {cnt} | {pct}% |")
+        md.append("")
+
+    # ── 跨模块依赖 ──
+    if cross_deps:
+        md.append("## 跨模块依赖 (热点调用)\n")
+        md.append("文件间 CALLS 调用边按频次排名，反映模块间耦合关系:\n")
+        # 构建模块级依赖 Mermaid
+        mod_dep_counter: Counter = Counter()
+        for r in cross_deps:
+            if len(r) >= 3:
+                src_mod = _module_prefix(r[0])
+                dst_mod = _module_prefix(r[1])
+                if src_mod != dst_mod:
+                    mod_dep_counter[(src_mod, dst_mod)] += int(r[2])
+        top_mod_deps = mod_dep_counter.most_common(12)
+        if top_mod_deps:
+            md.append("```mermaid")
+            md.append("graph LR")
+            seen_mods = set()
+            for (src, dst), w in top_mod_deps:
+                src_id = src.replace("/", "_").replace("(", "").replace(")", "")
+                dst_id = dst.replace("/", "_").replace("(", "").replace(")", "")
+                md.append(f"    {src_id}[\"{src}\"] -->|{w}| {dst_id}[\"{dst}\"]")
+                seen_mods.add(src)
+                seen_mods.add(dst)
+            md.append("```\n")
+        md.append("| 调用方文件 | 被调用文件 | 调用次数 |")
+        md.append("|-----------|-----------|---------|")
+        for r in cross_deps[:15]:
+            if len(r) >= 3:
+                md.append(f"| {r[0]} | {r[1]} | {r[2]} |")
+        md.append("")
+
+    # ── 文件间 IMPORTS ──
+    if imports:
+        # 汇总为模块级
+        import_mod_counter: Counter = Counter()
+        for r in imports:
+            if len(r) >= 2:
+                s, d = _module_prefix(r[0]), _module_prefix(r[1])
+                if s != d:
+                    import_mod_counter[(s, d)] += 1
+        top_imports = import_mod_counter.most_common(10)
+        if top_imports:
+            md.append("## 模块间导入关系\n")
+            md.append("```mermaid")
+            md.append("graph LR")
+            for (s, d), w in top_imports:
+                sid = s.replace("/", "_").replace("(", "").replace(")", "")
+                did = d.replace("/", "_").replace("(", "").replace(")", "")
+                md.append(f"    {sid}[\"{s}\"] -->|{w}| {did}[\"{d}\"]")
+            md.append("```\n")
+
+    # ── Hub 节点 ──
+    hubs_all = []
+    for r in hub_fns:
+        if len(r) >= 3:
+            hubs_all.append((r[0], r[1], r[2], "Function"))
+    for r in hub_classes:
+        if len(r) >= 3:
+            hubs_all.append((r[0], r[1], r[2], "Class"))
+    if hubs_all:
+        hubs_all.sort(key=lambda x: -int(x[2]))
+        md.append("## 高引用度符号 (Hub Nodes)\n")
+        md.append("被其他符号引用次数最多的函数和类，是代码库的**核心 API**:\n")
+        md.append("| 符号 | 文件 | 引用次数 | 类型 |")
+        md.append("|------|------|---------|------|")
+        for name, fpath, refs, label in hubs_all[:20]:
+            md.append(f"| `{name}` | {fpath} | {refs} | {label} |")
+        md.append("")
+
+    # ── 顶级调用者 ──
+    if top_callers:
+        md.append("## 顶级调用者 (Top Callers)\n")
+        md.append("主动调用其他函数次数最多的符号，通常是**入口函数或核心调度器**:\n")
+        md.append("| 函数 | 文件 | 调用次数 |")
+        md.append("|------|------|---------|")
+        for r in top_callers:
+            if len(r) >= 3:
+                md.append(f"| `{r[0]}` | {r[1]} | {r[2]} |")
+        md.append("")
+
+    # ── 执行流程 (Process Flows) ──
+    if proc_sorted:
+        md.append("## 执行流程 (Process Flows)\n")
+        md.append(f"GitNexus 通过调用链追踪检测到 **{n_processes}** 条执行流程。以下为最重要的 {min(10, len(proc_sorted))} 条:\n")
+        for pid, pg in proc_sorted[:10]:
+            type_tag = f"`{pg['type']}`" if pg["type"] else ""
+            md.append(f"### {pg['label']} {type_tag} {pg['stepCount']} steps")
+            # 涉及文件列表 (去重, 保序)
+            seen_files: list[str] = []
+            for sname, sfile, _ in pg["steps"]:
+                if sfile and sfile not in seen_files:
+                    seen_files.append(sfile)
+            if seen_files:
+                md.append(f"> {' → '.join(seen_files)}")
+            md.append("")
+            for i, (sname, sfile, _) in enumerate(pg["steps"], 1):
+                md.append(f"{i}. `{sname}` ({sfile})")
+            md.append("")
+
+    # ── 关键文件索引 ──
+    if file_def_map:
+        # 收集 hub 符号名集合，用于 ★ 标记
+        hub_names_set = set()
+        for r in hub_fns:
+            if len(r) >= 3:
+                hub_names_set.add(r[0])
+        for r in hub_classes:
+            if len(r) >= 3:
+                hub_names_set.add(r[0])
+        # 按符号数降序，只展示 >= 5 的文件
+        file_def_sorted = sorted(file_def_map.items(), key=lambda x: -len(x[1]))
+        file_def_sorted = [(f, syms) for f, syms in file_def_sorted if len(syms) >= 5][:15]
+        if file_def_sorted:
+            md.append("## 关键文件索引\n")
+            md.append("AI 导航指南：按文件定义的符号数排列，快速了解每个文件的职责。\n")
+            md.append("| 文件 | 符号数 | 主要定义 |")
+            md.append("|------|--------|---------|")
+            for fpath, syms in file_def_sorted:
+                preview_names = []
+                for sym_name, _ in syms[:6]:
+                    star = "★" if sym_name in hub_names_set else ""
+                    preview_names.append(f"`{sym_name}`{star}")
+                more = ", ..." if len(syms) > 6 else ""
+                md.append(f"| {fpath} | {len(syms)} | {', '.join(preview_names)}{more} |")
+            md.append("")
+
+    # ── 类继承 ──
+    if inheritance:
+        parent_map: dict[str, list[str]] = {}
+        for r in inheritance:
+            if len(r) >= 2:
+                parent_map.setdefault(r[1], []).append(r[0])
+        sorted_parents = sorted(parent_map.items(), key=lambda x: -len(x[1]))[:20]
+        total_edges_ih = sum(len(ch) for _, ch in sorted_parents)
+        md.append("## 类继承体系\n")
+        md.append(f"{len(inheritance)} 条继承关系，{len(parent_map)} 个基类:\n")
+        if total_edges_ih <= 40:
+            md.append("```mermaid")
+            md.append("classDiagram")
+            for parent, children in sorted_parents:
+                for child in children:
+                    md.append(f"    {parent} <|-- {child}")
+            md.append("```\n")
+        else:
+            md.append("| 基类 | 子类 |")
+            md.append("|------|------|")
+            for parent, children in sorted_parents:
+                md.append(f"| `{parent}` | {', '.join(f'`{c}`' for c in children)} |")
+            md.append("")
+
+    # ── 核心 Struct ──
+    if structs:
+        # 按模块分组，优先显示核心模块
+        struct_by_mod: dict[str, list[str]] = {}
+        for r in structs:
+            if len(r) >= 2:
+                mod = _module_prefix(r[1])
+                struct_by_mod.setdefault(mod, []).append(r[0])
+        md.append("## 核心数据结构 (Struct)\n")
+        md.append(f"共索引到 {len(structs)} 个 Struct，按模块分布:\n")
+        for mod in sorted(struct_by_mod, key=lambda m: -len(struct_by_mod[m])):
+            names = struct_by_mod[mod]
+            preview = ", ".join(f"`{n}`" for n in names[:8])
+            more = f" ... (+{len(names)-8})" if len(names) > 8 else ""
+            md.append(f"- **{mod}/** ({len(names)}): {preview}{more}")
+        md.append("")
+
+    # ── Enum 列表 ──
+    if enums:
+        md.append("## 枚举类型 (Enum)\n")
+        enum_by_mod: dict[str, list[str]] = {}
+        for r in enums:
+            if len(r) >= 2:
+                mod = _module_prefix(r[1])
+                enum_by_mod.setdefault(mod, []).append(r[0])
+        for mod in sorted(enum_by_mod, key=lambda m: -len(enum_by_mod[m])):
+            names = enum_by_mod[mod]
+            preview = ", ".join(f"`{n}`" for n in names[:8])
+            more = f" ... (+{len(names)-8})" if len(names) > 8 else ""
+            md.append(f"- **{mod}/** ({len(names)}): {preview}{more}")
+        md.append("")
+
+    # ── 命名空间 ──
+    if namespaces:
+        md.append("## 命名空间结构\n")
+        md.append("```")
+        for i, ns in enumerate(namespaces):
+            prefix = "└──" if i == len(namespaces) - 1 else "├──"
+            md.append(f"{prefix} {ns}::")
+        md.append("```\n")
+
+    # ── 社区 (增强版: 大社区展示成员详情) ──
+    if communities:
+        md.append("## 社区结构 (Leiden Clustering)\n")
+        md.append(f"Leiden 算法检测到 **{total_communities}** 个社区，以下为符号数最多的社区:\n")
+        # 大社区 (symbolCount >= 10): 展示文件列表 + 符号列表
+        for c in communities:
+            if len(c) >= 4:
+                cid = c[0]
+                try:
+                    sym_count = int(c[2])
+                except (ValueError, TypeError):
+                    sym_count = 0
+                try:
+                    coh = f"{float(c[3]):.2f}"
+                except (ValueError, TypeError):
+                    coh = c[3]
+                detail = comm_detail.get(cid)
+                if sym_count >= 10 and detail and detail["members"]:
+                    md.append(f"### {cid} — {c[1]} ({sym_count} symbols, cohesion {coh})\n")
+                    # 涉及文件 (去重, 最多 8 个)
+                    seen: list[str] = []
+                    for _, _, fp in detail["members"]:
+                        if fp and fp not in seen:
+                            seen.append(fp)
+                    file_preview = ", ".join(seen[:8])
+                    if len(seen) > 8:
+                        file_preview += ", ..."
+                    md.append(f"**涉及文件**: {file_preview}")
+                    # 核心符号 (最多 8 个)
+                    sym_preview = ", ".join(f"`{n}`" for n, _, _ in detail["members"][:8])
+                    if len(detail["members"]) > 8:
+                        sym_preview += ", ..."
+                    md.append(f"**核心符号**: {sym_preview}\n")
+        # 总结表格 (所有社区)
+        md.append("### 社区总览\n")
+        md.append("| 社区 | 域 | 符号数 | 凝聚度 |")
+        md.append("|------|-----|--------|--------|")
+        for c in communities:
+            if len(c) >= 4:
+                try:
+                    coh = f"{float(c[3]):.2f}"
+                except (ValueError, TypeError):
+                    coh = c[3]
+                md.append(f"| {c[0]} | {c[1]} | {c[2]} | {coh} |")
+        md.append("")
+
+    # ── 边统计 ──
+    if edge_data:
+        md.append("## 边关系统计\n")
+        md.append("| 边类型 | 含义 | 数量 | 占比 |")
+        md.append("|--------|------|------|------|")
+        edge_desc = {
+            "CALLS": "函数调用", "DEFINES": "文件定义符号", "IMPORTS": "文件/模块导入",
+            "CONTAINS": "目录包含文件", "MEMBER_OF": "命名空间成员",
+            "STEP_IN_PROCESS": "流程步骤", "EXTENDS": "类继承",
+        }
+        for label, val in edge_data:
+            pct = val * 100 // total_edges if total_edges else 0
+            desc = edge_desc.get(label, "")
+            md.append(f"| `{label}` | {desc} | {val:,} | {pct}% |")
+        md.append(f"| **Total** | | **{total_edges:,}** | |")
+        md.append("")
+        md.append("```")
+        for label, val in edge_data:
+            bar = "█" * (val * 20 // (edge_data[0][1] or 1))
+            md.append(f"{label:<20} {val:>6,}  {bar}")
+        md.append("```\n")
+
+    # 写入文件
+    vault_dir = OBSIDIAN_VAULT / "Projects" / repo_name
+    vault_dir.mkdir(parents=True, exist_ok=True)
+    doc_path = vault_dir / f"{repo_name} 代码图谱.md"
+    doc_path.write_text("\n".join(md), encoding="utf-8")
+
+    # 交叉引用
+    main_doc = vault_dir / f"{repo_name}.md"
+    link_text = f"[[{repo_name} 代码图谱]]"
+    if main_doc.is_file():
+        content = main_doc.read_text(encoding="utf-8")
+        if link_text not in content:
+            # 找 [!tip] 详细文档 段落末尾追加
+            if "> [!tip]" in content:
+                lines = content.split("\n")
+                insert_idx = -1
+                in_tip = False
+                for i, line in enumerate(lines):
+                    if "[!tip]" in line:
+                        in_tip = True
+                    elif in_tip and not line.startswith(">"):
+                        insert_idx = i
+                        break
+                if insert_idx > 0:
+                    lines.insert(insert_idx, f"> - {link_text} — GitNexus 代码图谱")
+                    main_doc.write_text("\n".join(lines), encoding="utf-8")
+                    console.print(f"  [dim]已添加交叉引用到 {repo_name}.md[/dim]")
+
+    console.print(f"\n[green]✓ 已生成: {doc_path}[/green]")
+    console.print(f"  [dim]{total_nodes:,} 节点 | {total_edges:,} 边 | {total_communities} 社区 | {n_processes} 流程[/dim]")
+
+
 def cmd_graph(args):
     """GitNexus 代码图谱分析 (调度器)"""
     graph_cmd = getattr(args, "graph_cmd", "overview") or "overview"
@@ -1567,6 +2191,10 @@ def cmd_graph(args):
         "query": cmd_graph_query,
         "deps": cmd_graph_deps,
         "community": cmd_graph_community,
+        "report": cmd_graph_report,
+        "hierarchy": cmd_graph_hierarchy,
+        "hubs": cmd_graph_hubs,
+        "modules": cmd_graph_modules,
     }
     fn = dispatch.get(graph_cmd, cmd_graph_overview)
     fn(args)
@@ -1965,8 +2593,9 @@ def main():
     graph_parser = sub.add_parser("graph", help="GitNexus 代码图谱分析")
     graph_parser.add_argument("repo", help="仓库名称")
     graph_parser.add_argument("graph_cmd", nargs="?", default="overview",
-                              choices=["index", "query", "deps", "community", "overview"],
-                              help="操作: index|query|deps|community (默认 overview)")
+                              choices=["index", "query", "deps", "community", "overview",
+                                       "report", "hierarchy", "hubs", "modules"],
+                              help="操作: index|overview|query|deps|community|report|hierarchy|hubs|modules")
     graph_parser.add_argument("keywords", nargs="?", default="", help="query 的搜索关键词")
 
     args = parser.parse_args()
