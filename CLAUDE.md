@@ -6,13 +6,13 @@
 
 ```
 codemaster/
-  codeboard.py    # 单文件，全部逻辑 (~1270行)
+  codeboard.py    # 单文件，全部逻辑 (~2010行)
   CLAUDE.md       # 本文件
 ```
 
 - **语言**: Python 3.14+
 - **依赖**: `rich` (终端美化)，标准库 (`subprocess`, `concurrent.futures`, `argparse`, ...)
-- **外部工具**: `git` (必须), `lazygit` (open/dirty/each 子命令需要)
+- **外部工具**: `git` (必须), `lazygit` (open/dirty/each 子命令需要), `gitnexus` (graph 子命令需要)
 
 ## 使用方式
 
@@ -39,6 +39,13 @@ cb stash <repo> [push|pop|list] [-m "msg"]  # 快速 stash 操作
 cb open <repo> [panel]    # lazygit 打开仓库，panel 可选 status/branch/log/stash
 cb dirty                  # 列出脏仓库，交互选择后 lazygit 打开
 cb each                   # 逐个 lazygit 处理所有脏仓库
+
+# ── GitNexus 代码图谱 ──
+cb graph <repo>                    # 图谱概览：节点/边统计、社区数、Top 调用者
+cb graph <repo> index              # 索引仓库到知识图谱 (首次使用需要)
+cb graph <repo> query <keywords>   # 搜索符号：执行流 + 定义 + 流程符号
+cb graph <repo> deps               # 跨模块依赖图 (文件级 CALLS 边统计)
+cb graph <repo> community          # Leiden 社区结构 (含成员采样)
 ```
 
 ### 通用选项
@@ -67,6 +74,10 @@ cb push                     # 推送所有有 ahead 的仓库
 cb commit quant -m "feat: xxx" -y  # 快速提交
 cb stash quant              # 暂存 quant 的变更
 cb stash quant pop          # 恢复暂存
+cb graph SEIR               # SEIR 图谱概览
+cb graph SEIR community     # SEIR 社区结构
+cb graph SEIR deps          # SEIR 跨模块调用图
+cb graph SEIR query "dfs evaluate"  # 搜索符号
 ```
 
 ## 架构设计
@@ -86,13 +97,13 @@ main() → argparse 解析 → handler(args)
 ### 命令分类
 
 ```
-查看类 (只读)     操作类 (写入)      lazygit 联动
-─────────────     ──────────────     ─────────────
-dashboard         pull               open
-activity          push               dirty
-health            commit             each
-detail            stash
-stats
+查看类 (只读)     操作类 (写入)      lazygit 联动    图谱分析
+─────────────     ──────────────     ─────────────   ─────────────
+dashboard         pull               open            graph (overview)
+activity          push               dirty           graph index
+health            commit             each            graph query
+detail            stash                              graph deps
+stats                                                graph community
 grep
 ```
 
@@ -121,6 +132,11 @@ grep
 | `relative_time(dt)` | datetime → 中文相对时间 |
 | `detect_remote_type(url)` | remote URL → github/gitlab/gitee/... |
 | `LANG_MAP` / `IGNORE_EXTS` | 文件扩展名 → 语言映射 & 忽略列表 |
+| `require_gitnexus()` | 检查 gitnexus 可用性，返回路径 |
+| `run_gitnexus(gn, subcmd, ...)` | gitnexus 子进程调用包装 (输出在 stderr) |
+| `_parse_md_table(raw)` | 解析 gitnexus cypher 返回的 markdown 表格 |
+| `_graph_require(args)` | graph 系列命令的公共前置检查 |
+| `GITNEXUS_BIN` | gitnexus 二进制路径 (nvm 管理) |
 
 ### scan_repo 返回的 dict 结构
 

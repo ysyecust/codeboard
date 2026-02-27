@@ -23,6 +23,13 @@ from rich import box
 console = Console()
 
 DEFAULT_CODE_DIR = Path.home() / "Code"
+# 额外单独纳管的仓库路径（不整目录扫描，只加特定仓库）
+EXTRA_REPOS = [
+    Path.home() / "Documents" / "Code" / "EO",
+    Path.home() / "Documents" / "Code" / "SimonaSolver",
+]
+OBSIDIAN_VAULT = Path.home() / "Documents" / "Obsidian Vault"
+GITNEXUS_BIN = str(Path.home() / ".nvm/versions/node/v22.15.1/bin/gitnexus")
 
 LANG_MAP = {
     ".py": "Python", ".pyx": "Python", ".pyi": "Python",
@@ -265,14 +272,21 @@ def scan_repo(repo_path: Path, full: bool = False) -> dict | None:
     return info
 
 
-def scan_all(code_dir: Path, full: bool = True, filter_kw: str = "") -> list[dict]:
-    """并行扫描所有仓库"""
-    repos = sorted(
-        [d for d in code_dir.iterdir() if d.is_dir() and (d / ".git").is_dir()],
-        key=lambda p: p.name.lower(),
-    )
+def list_git_repos(code_dir: Path, filter_kw: str = "") -> list[Path]:
+    """列出所有 git 仓库路径（含 EXTRA_REPOS）"""
+    repos = [d for d in code_dir.iterdir() if d.is_dir() and (d / ".git").is_dir()]
+    for extra in EXTRA_REPOS:
+        if extra.is_dir() and (extra / ".git").is_dir() and extra.parent != code_dir:
+            repos.append(extra)
+    repos.sort(key=lambda p: p.name.lower())
     if filter_kw:
         repos = [r for r in repos if filter_kw.lower() in r.name.lower()]
+    return repos
+
+
+def scan_all(code_dir: Path, full: bool = True, filter_kw: str = "") -> list[dict]:
+    """并行扫描所有仓库"""
+    repos = list_git_repos(code_dir, filter_kw)
 
     results = []
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -358,8 +372,14 @@ def cmd_dashboard(args):
                 markers.append(f"↓{r['behind']}")
             remote_text.append(f" {' '.join(markers)}", style="yellow")
 
+        # 非默认目录的仓库加路径标注
+        display_name = Text(r["name"], style="bold cyan")
+        if Path(r["path"]).parent != code_dir:
+            short_parent = str(Path(r["path"]).parent).replace(str(Path.home()), "~")
+            display_name.append(f" ({short_parent})", style="dim")
+
         table.add_row(
-            r["name"],
+            display_name,
             r["branch"],
             time_text,
             status,
@@ -378,12 +398,7 @@ def cmd_activity(args):
     code_dir = Path(args.path).expanduser()
     limit = args.limit
 
-    repos = sorted(
-        [d for d in code_dir.iterdir() if d.is_dir() and (d / ".git").is_dir()],
-        key=lambda p: p.name.lower(),
-    )
-    if args.filter:
-        repos = [r for r in repos if args.filter.lower() in r.name.lower()]
+    repos = list_git_repos(code_dir, filter_kw=args.filter)
 
     all_commits = []
 
@@ -742,17 +757,24 @@ def cmd_stats(args):
 
 
 def find_repo(code_dir: Path, name: str) -> Path | None:
-    """按名称查找仓库，支持模糊匹配"""
-    exact = code_dir / name
-    if (exact / ".git").is_dir():
-        return exact
-    candidates = [d for d in code_dir.iterdir()
-                  if d.is_dir() and (d / ".git").is_dir()
-                  and name.lower() in d.name.lower()]
+    """按名称查找仓库，支持模糊匹配（含 EXTRA_REPOS）"""
+    # 支持直接传路径
+    direct = Path(name).expanduser()
+    if direct.is_absolute() and (direct / ".git").is_dir():
+        return direct
+    all_repos = list_git_repos(code_dir)
+    # 精确匹配
+    for r in all_repos:
+        if r.name == name:
+            return r
+    # 模糊匹配
+    candidates = [r for r in all_repos if name.lower() in r.name.lower()]
     if len(candidates) == 1:
         return candidates[0]
     if len(candidates) > 1:
-        console.print(f"[yellow]多个匹配: {', '.join(c.name for c in candidates)}[/yellow]")
+        hints = [f"{c.name} ({c.parent})" for c in candidates]
+        console.print(f"[yellow]多个匹配: {', '.join(hints)}[/yellow]")
+        console.print("[dim]提示: 用完整路径区分，如 cb detail ~/Documents/Code/EO[/dim]")
         return None
     console.print(f"[red]未找到仓库: {name}[/red]")
     return None
@@ -764,6 +786,36 @@ def require_lazygit() -> str | None:
     if not path:
         console.print("[red]未安装 lazygit[/red]  brew install lazygit")
     return path
+
+
+def require_gitnexus() -> str | None:
+    """检查 gitnexus 是否可用，返回路径"""
+    path = shutil.which("gitnexus") or (GITNEXUS_BIN if Path(GITNEXUS_BIN).is_file() else None)
+    if not path:
+        console.print("[red]未找到 gitnexus[/red]  npm install -g gitnexus")
+        console.print(f"[dim]期望路径: {GITNEXUS_BIN}[/dim]")
+    return path
+
+
+def is_graph_indexed(repo_path: Path) -> bool:
+    """检查仓库是否已建立 GitNexus 图索引"""
+    return (repo_path / ".gitnexus").is_dir()
+
+
+def run_gitnexus(gn: str, subcmd: str, *args, timeout: int = 60) -> tuple[bool, str]:
+    """调用 gitnexus 并返回 (成功, 输出) — gitnexus 把 JSON 输出到 stderr"""
+    try:
+        r = subprocess.run(
+            [gn, subcmd, *args],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        # gitnexus 将结构化输出写入 stderr
+        output = r.stderr.strip() or r.stdout.strip()
+        return r.returncode == 0, output
+    except subprocess.TimeoutExpired:
+        return False, ""
+    except Exception as e:
+        return False, str(e)
 
 
 def cmd_open(args):
@@ -1069,12 +1121,7 @@ def cmd_grep(args):
     """跨仓库代码搜索"""
     code_dir = Path(args.path).expanduser()
     pattern = args.pattern
-    repos = sorted(
-        [d for d in code_dir.iterdir() if d.is_dir() and (d / ".git").is_dir()],
-        key=lambda p: p.name.lower(),
-    )
-    if args.filter:
-        repos = [r for r in repos if args.filter.lower() in r.name.lower()]
+    repos = list_git_repos(code_dir, filter_kw=args.filter)
 
     all_results = []
 
@@ -1135,6 +1182,689 @@ def cmd_grep(args):
     console.print(f"\n[dim]共 {len(all_results)} 个仓库, {total_matches} 条匹配[/dim]")
 
 
+# ---------------------------------------------------------------------------
+# graph 命令 - GitNexus 代码图谱分析
+# ---------------------------------------------------------------------------
+
+def _parse_md_table(raw: str) -> list[list[str]]:
+    """解析 gitnexus cypher 返回的 markdown 表格 (JSON 包裹), 返回数据行 (跳过表头和分隔行)"""
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    md = data.get("markdown", "")
+    rows = []
+    header_skipped = False
+    for line in md.split("\n"):
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        if "---" in line:
+            header_skipped = True
+            continue
+        if not header_skipped:
+            # 第一行是表头，跳过
+            header_skipped = False  # 等 --- 分隔行来标记
+            continue
+        cells = [c.strip() for c in line.split("|")[1:-1]]
+        if cells:
+            rows.append(cells)
+    return rows
+
+
+def _graph_require(args) -> tuple[str, Path, str] | None:
+    """graph 子命令公共前置: 返回 (gitnexus路径, 仓库路径, 仓库名) 或 None"""
+    gn = require_gitnexus()
+    if not gn:
+        return None
+    code_dir = Path(args.path).expanduser()
+    repo_name = getattr(args, "repo", None)
+    if not repo_name:
+        console.print("[red]请指定仓库名称[/red]")
+        return None
+    repo_path = find_repo(code_dir, repo_name)
+    if not repo_path:
+        return None
+    return gn, repo_path, repo_path.name
+
+
+def cmd_graph_index(args):
+    """索引仓库到 GitNexus 知识图谱"""
+    result = _graph_require(args)
+    if not result:
+        return
+    gn, repo_path, repo_name = result
+
+    if is_graph_indexed(repo_path):
+        console.print(f"[yellow]⟳ {repo_name} 已有索引，将重新构建[/yellow]")
+
+    # 检测语言，对 C++ 给出警告
+    info = scan_repo(repo_path, full=True)
+    if info and info.get("lang") in ("C++", "C", "C/C++"):
+        console.print("[yellow]⚠ C/C++ 项目索引可能耗时较长或不稳定[/yellow]")
+
+    console.print(f"[bold]索引: {repo_name}[/bold] → {repo_path}\n")
+    try:
+        # 直接输出到终端，让用户看到进度
+        r = subprocess.run([gn, "index", str(repo_path)], timeout=180)
+        if r.returncode == 0:
+            console.print(f"\n[green]✓ 索引完成: {repo_name}[/green]")
+        else:
+            console.print(f"\n[red]✗ 索引失败 (exit {r.returncode})[/red]")
+    except subprocess.TimeoutExpired:
+        console.print("\n[red]✗ 索引超时 (>180s)[/red]")
+    except KeyboardInterrupt:
+        console.print("\n[yellow]已中断[/yellow]")
+
+
+def cmd_graph_overview(args):
+    """显示仓库图谱概览"""
+    result = _graph_require(args)
+    if not result:
+        return
+    gn, repo_path, repo_name = result
+
+    if not is_graph_indexed(repo_path):
+        console.print(f"[yellow]尚未建立图索引，请先运行: cb graph index {repo_name}[/yellow]")
+        return
+
+    # 索引时间
+    gn_dir = repo_path / ".gitnexus"
+    try:
+        mtime = datetime.fromtimestamp(gn_dir.stat().st_mtime)
+        idx_time = relative_time(mtime)
+    except Exception:
+        idx_time = "未知"
+
+    # 查询节点统计
+    ok1, out1 = run_gitnexus(gn, "cypher",
+        "MATCH (n) RETURN labels(n) AS type, count(*) AS cnt ORDER BY cnt DESC",
+        "--repo", repo_name)
+
+    # 查询边统计
+    ok2, out2 = run_gitnexus(gn, "cypher",
+        "MATCH ()-[r:CodeRelation]->() RETURN r.type AS edgeType, count(*) AS cnt ORDER BY cnt DESC",
+        "--repo", repo_name)
+
+    # 查询社区数
+    ok3, out3 = run_gitnexus(gn, "cypher",
+        "MATCH (c:Community) RETURN count(*) AS n",
+        "--repo", repo_name)
+
+    # 查询高出度函数 (调用最多的函数)
+    ok4, out4 = run_gitnexus(gn, "cypher",
+        "MATCH (a:Function)-[r:CodeRelation {type: 'CALLS'}]->(b) "
+        "RETURN a.name AS fn, a.filePath AS file, count(*) AS calls "
+        "ORDER BY calls DESC LIMIT 10",
+        "--repo", repo_name)
+
+    # ── 构建输出 ──
+    parts = []
+    parts.append(f"[dim]索引时间: {idx_time}[/dim]\n")
+
+    # 节点统计表
+    if ok1:
+        rows = _parse_md_table(out1)
+        if rows:
+            tbl = Table(title="节点统计", box=box.SIMPLE, show_header=True, padding=(0, 1))
+            tbl.add_column("类型", style="cyan", no_wrap=True)
+            tbl.add_column("数量", style="bold", justify="right")
+            total = 0
+            for r in rows:
+                tbl.add_row(r[0], r[1])
+                total += int(r[1]) if r[1].isdigit() else 0
+            parts.append(tbl)
+            parts.append(f"[dim]总节点: {total}[/dim]\n")
+
+    # 边统计表
+    if ok2:
+        rows = _parse_md_table(out2)
+        if rows:
+            tbl = Table(title="边统计", box=box.SIMPLE, show_header=True, padding=(0, 1))
+            tbl.add_column("类型", style="magenta", no_wrap=True)
+            tbl.add_column("数量", style="bold", justify="right")
+            total_edges = 0
+            for r in rows:
+                tbl.add_row(r[0], r[1])
+                total_edges += int(r[1]) if r[1].isdigit() else 0
+            parts.append(tbl)
+            parts.append(f"[dim]总边: {total_edges}[/dim]\n")
+
+    # 社区数
+    if ok3:
+        rows = _parse_md_table(out3)
+        if rows and rows[0]:
+            parts.append(f"[bold]社区数: {rows[0][0]}[/bold] (Leiden 聚类)\n")
+
+    # 高出度函数
+    if ok4:
+        rows = _parse_md_table(out4)
+        if rows:
+            tbl = Table(title="Top 调用者", box=box.SIMPLE, show_header=True, padding=(0, 1))
+            tbl.add_column("函数", style="bold cyan", no_wrap=True)
+            tbl.add_column("文件", style="dim")
+            tbl.add_column("调用数", style="bold yellow", justify="right")
+            for r in rows:
+                if len(r) >= 3:
+                    tbl.add_row(r[0], r[1], r[2])
+            parts.append(tbl)
+
+    # 输出 Panel
+    from rich.console import Group
+    panel = Panel(Group(*parts), title=f"[bold]{repo_name}[/bold] — 代码图谱", border_style="blue")
+    console.print(panel)
+
+
+def cmd_graph_query(args):
+    """搜索图谱中的符号"""
+    result = _graph_require(args)
+    if not result:
+        return
+    gn, repo_path, repo_name = result
+
+    if not is_graph_indexed(repo_path):
+        console.print(f"[yellow]尚未建立图索引，请先运行: cb graph index {repo_name}[/yellow]")
+        return
+
+    keywords = args.keywords
+    ok, out = run_gitnexus(gn, "query", keywords, "--repo", repo_name)
+    if not ok or not out:
+        console.print("[red]查询失败或无结果[/red]")
+        return
+
+    if getattr(args, "json", False):
+        print(out)
+        return
+
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        console.print(out)
+        return
+
+    # 解析 processes
+    processes = data.get("processes", [])
+    if processes:
+        tbl = Table(title=f"执行流 ({len(processes)})", box=box.SIMPLE, show_header=True, padding=(0, 1))
+        tbl.add_column("ID", style="dim", no_wrap=True)
+        tbl.add_column("摘要", style="bold cyan")
+        tbl.add_column("步数", justify="right")
+        tbl.add_column("类型", style="magenta")
+        for p in processes[:15]:
+            tbl.add_row(
+                p.get("id", ""),
+                p.get("summary", ""),
+                str(p.get("step_count", "")),
+                p.get("process_type", ""),
+            )
+        console.print(tbl)
+
+    # 解析 definitions
+    defs = data.get("definitions", [])
+    if defs:
+        tbl = Table(title=f"符号定义 ({len(defs)})", box=box.SIMPLE, show_header=True, padding=(0, 1))
+        tbl.add_column("名称", style="bold cyan", no_wrap=True)
+        tbl.add_column("文件", style="dim")
+        tbl.add_column("行号", style="yellow", justify="right")
+        for d in defs[:20]:
+            name = d.get("name", "")
+            fpath = d.get("filePath", "")
+            line = str(d.get("startLine", ""))
+            tbl.add_row(name, fpath, line)
+        console.print(tbl)
+
+    # process_symbols
+    syms = data.get("process_symbols", [])
+    if syms:
+        tbl = Table(title=f"流程符号 ({len(syms)})", box=box.SIMPLE, show_header=True, padding=(0, 1))
+        tbl.add_column("名称", style="bold cyan", no_wrap=True)
+        tbl.add_column("文件", style="dim")
+        tbl.add_column("模块", style="magenta")
+        tbl.add_column("流程", style="dim")
+        for s in syms[:15]:
+            tbl.add_row(
+                s.get("name", ""),
+                s.get("filePath", ""),
+                s.get("module", ""),
+                s.get("process_id", ""),
+            )
+        console.print(tbl)
+
+    total = len(processes) + len(defs) + len(syms)
+    if total == 0:
+        console.print("[dim]无匹配结果[/dim]")
+    else:
+        console.print(f"\n[dim]共 {total} 条结果[/dim]")
+
+
+def cmd_graph_deps(args):
+    """显示跨模块依赖图"""
+    result = _graph_require(args)
+    if not result:
+        return
+    gn, repo_path, repo_name = result
+
+    if not is_graph_indexed(repo_path):
+        console.print(f"[yellow]尚未建立图索引，请先运行: cb graph index {repo_name}[/yellow]")
+        return
+
+    # 跨文件函数调用统计
+    ok, out = run_gitnexus(gn, "cypher",
+        "MATCH (a:Function)-[r:CodeRelation {type: 'CALLS'}]->(b) "
+        "WHERE a.filePath <> b.filePath "
+        "RETURN a.filePath, b.filePath, count(*) AS weight "
+        "ORDER BY weight DESC LIMIT 30",
+        "--repo", repo_name)
+
+    if not ok or not out:
+        console.print("[red]查询失败[/red]")
+        return
+
+    if getattr(args, "json", False):
+        print(out)
+        return
+
+    tbl = Table(title=f"{repo_name} — 跨模块依赖 (CALLS)", box=box.SIMPLE, show_header=True, padding=(0, 1))
+    tbl.add_column("调用方", style="bold cyan")
+    tbl.add_column("→", style="dim", no_wrap=True)
+    tbl.add_column("被调用方", style="bold green")
+    tbl.add_column("调用数", style="yellow", justify="right")
+
+    rows = _parse_md_table(out)
+    for r in rows:
+        if len(r) >= 3:
+            tbl.add_row(r[0], "→", r[1], r[2])
+
+    if not rows:
+        console.print("[dim]无跨模块调用边[/dim]")
+    else:
+        console.print(tbl)
+        console.print(f"\n[dim]{len(rows)} 条跨文件调用关系[/dim]")
+
+
+def cmd_graph_community(args):
+    """显示 Leiden 社区结构"""
+    result = _graph_require(args)
+    if not result:
+        return
+    gn, repo_path, repo_name = result
+
+    if not is_graph_indexed(repo_path):
+        console.print(f"[yellow]尚未建立图索引，请先运行: cb graph index {repo_name}[/yellow]")
+        return
+
+    # 查询社区列表
+    ok, out = run_gitnexus(gn, "cypher",
+        "MATCH (c:Community) RETURN c.id, c.label, c.symbolCount, c.cohesion "
+        "ORDER BY c.symbolCount DESC",
+        "--repo", repo_name)
+
+    if not ok or not out:
+        console.print("[red]查询失败[/red]")
+        return
+
+    if getattr(args, "json", False):
+        print(out)
+        return
+
+    communities = _parse_md_table(out)
+
+    if not communities:
+        console.print("[dim]无社区数据[/dim]")
+        return
+
+    # 查询 top 8 社区的成员 (并行)
+    member_map = {}
+    top_ids = [c[0] for c in communities[:8]]
+
+    def _fetch_members(comm_id):
+        ok, mout = run_gitnexus(gn, "cypher",
+            f"MATCH (s)-[r:CodeRelation {{type: 'MEMBER_OF'}}]->(c:Community {{id: '{comm_id}'}}) "
+            f"RETURN s.name AS name LIMIT 8",
+            "--repo", repo_name, timeout=15)
+        names = []
+        if ok and mout:
+            for r in _parse_md_table(mout):
+                if r and r[0]:
+                    names.append(r[0])
+        return comm_id, names
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for comm_id, names in pool.map(lambda cid: _fetch_members(cid), top_ids):
+            member_map[comm_id] = names
+
+    # 渲染表格
+    tbl = Table(title=f"{repo_name} — Leiden 社区", box=box.SIMPLE, show_header=True, padding=(0, 1))
+    tbl.add_column("ID", style="dim", no_wrap=True)
+    tbl.add_column("域", style="magenta", no_wrap=True)
+    tbl.add_column("符号数", style="bold yellow", justify="right")
+    tbl.add_column("凝聚度", style="cyan", justify="right")
+    tbl.add_column("成员 (采样)", style="dim")
+
+    for c in communities:
+        comm_id = c[0]
+        members = member_map.get(comm_id, [])
+        members_str = ", ".join(members[:6])
+        if len(members) > 6:
+            members_str += " ..."
+        cohesion = c[3]
+        try:
+            cohesion = f"{float(cohesion):.2f}"
+        except ValueError:
+            pass
+        tbl.add_row(comm_id, c[1], c[2], cohesion, members_str)
+
+    console.print(tbl)
+    console.print(f"\n[dim]共 {len(communities)} 个社区[/dim]")
+
+
+def cmd_graph(args):
+    """GitNexus 代码图谱分析 (调度器)"""
+    graph_cmd = getattr(args, "graph_cmd", "overview") or "overview"
+    dispatch = {
+        "index": cmd_graph_index,
+        "overview": cmd_graph_overview,
+        "query": cmd_graph_query,
+        "deps": cmd_graph_deps,
+        "community": cmd_graph_community,
+    }
+    fn = dispatch.get(graph_cmd, cmd_graph_overview)
+    fn(args)
+
+
+# ---------------------------------------------------------------------------
+# doc 命令 - 为仓库生成 Obsidian 项目文档
+# ---------------------------------------------------------------------------
+
+def _extract_section(text: str, heading: str) -> str:
+    """从 markdown 文本中提取指定标题的内容段落（感知代码块）"""
+    lines = text.split("\n")
+    result = []
+    capturing = False
+    in_code_block = False
+    level = 0
+    for line in lines:
+        if capturing:
+            # 跟踪代码块状态
+            if line.strip().startswith("```"):
+                in_code_block = not in_code_block
+            # 代码块内不判断标题
+            if not in_code_block and line.startswith("#"):
+                cur = len(line) - len(line.lstrip("#"))
+                if cur <= level:
+                    break
+            result.append(line)
+        elif heading.lower() in line.lower() and line.lstrip().startswith("#"):
+            level = len(line) - len(line.lstrip("#"))
+            capturing = True
+    return "\n".join(result).strip()
+
+
+def _find_key_diagrams(repo_path: Path, max_count: int = 12) -> list[Path]:
+    """查找项目中的关键架构图（优先 docs/design/，排除自动生成的图）"""
+    # 排除自动生成的目录
+    skip_dirs = {"api", "html", "doxygen", "generated", "build", "node_modules"}
+
+    def _is_skipped(p: Path) -> bool:
+        return any(part.lower() in skip_dirs for part in p.relative_to(repo_path).parts)
+
+    diagrams = []
+    # 优先 docs/design/
+    design_dir = repo_path / "docs" / "design"
+    if design_dir.is_dir():
+        diagrams.extend(sorted(design_dir.glob("*.png")))
+    # 根目录图片
+    for img in sorted(repo_path.glob("*.png")):
+        if img not in diagrams:
+            diagrams.append(img)
+    # docs 下其他手动目录
+    docs_dir = repo_path / "docs"
+    if docs_dir.is_dir():
+        for img in sorted(docs_dir.rglob("*.png")):
+            if img not in diagrams and not _is_skipped(img):
+                diagrams.append(img)
+            if len(diagrams) >= max_count * 3:
+                break
+    return diagrams[:max_count]
+
+
+def _read_file_safe(path: Path, max_lines: int = 500) -> str:
+    """安全读取文件，限制行数"""
+    if not path.is_file():
+        return ""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").split("\n")
+        return "\n".join(lines[:max_lines])
+    except Exception:
+        return ""
+
+
+def cmd_doc(args):
+    """为仓库生成 Obsidian 项目文档"""
+    code_dir = Path(args.path).expanduser()
+    repo_path = find_repo(code_dir, args.repo)
+    if not repo_path:
+        return
+    repo_name = repo_path.name
+
+    # 扫描仓库信息
+    info = scan_repo(repo_path, full=True)
+    if not info:
+        console.print(f"[red]无法扫描: {repo_name}[/red]")
+        return
+
+    console.print(f"[bold]生成文档: {repo_name}[/bold]\n")
+
+    # ── 收集详细信息 ──
+    branches = run_git(repo_path, "branch", "--list").split("\n")
+    branches = [b.strip().lstrip("* ") for b in branches if b.strip()]
+    tags = run_git(repo_path, "tag", "--list").split("\n")
+    tags = [t for t in tags if t.strip()]
+    latest_tag = tags[-1] if tags else "无"
+
+    contributors_out = run_git(repo_path, "shortlog", "-sn", "HEAD")
+    contributors = []
+    for line in contributors_out.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("\t", 1)
+        if len(parts) == 2:
+            contributors.append((parts[1], int(parts[0].strip())))
+
+    lang_detail = detect_language_detail(repo_path)
+    total_files = sum(c for _, c in lang_detail) or 1
+    lang_str = ", ".join(f"{lang} {count * 100 // total_files}%" for lang, count in lang_detail[:5])
+
+    week_n = int(w) if (w := run_git(repo_path, "rev-list", "--count", "--since=7 days ago", "HEAD")).isdigit() else 0
+    month_n = int(m) if (m := run_git(repo_path, "rev-list", "--count", "--since=30 days ago", "HEAD")).isdigit() else 0
+
+    recent_log = run_git(repo_path, "log", "-15", "--format=%aI|%s")
+    recent_commits = []
+    for line in recent_log.split("\n"):
+        if "|" not in line:
+            continue
+        parts = line.split("|", 1)
+        try:
+            dt = datetime.fromisoformat(parts[0])
+            recent_commits.append((relative_time(dt), parts[1]))
+        except ValueError:
+            pass
+
+    # ── 读取项目文档 ──
+    readme = _read_file_safe(repo_path / "README.md")
+    claude_md = _read_file_safe(repo_path / "CLAUDE.md")
+
+    # 提取关键段落
+    overview = ""
+    if claude_md:
+        overview = _extract_section(claude_md, "项目概述") or _extract_section(claude_md, "概述") or _extract_section(claude_md, "Overview")
+    if not overview and readme:
+        # 取 README 第一个非标题段落
+        in_section = False
+        buf = []
+        for line in readme.split("\n"):
+            if line.startswith("# "):
+                in_section = True
+                continue
+            if in_section and line.startswith("## "):
+                break
+            if in_section:
+                buf.append(line)
+        overview = "\n".join(buf).strip()
+
+    architecture = ""
+    if claude_md:
+        architecture = _extract_section(claude_md, "架构设计") or _extract_section(claude_md, "架构") or _extract_section(claude_md, "Architecture")
+
+    # ── 查找关键图表 ──
+    diagrams = _find_key_diagrams(repo_path)
+
+    # ── 创建 Obsidian 目录 ──
+    vault_dir = OBSIDIAN_VAULT / "Projects" / repo_name
+    assets_dir = vault_dir / "assets"
+    vault_dir.mkdir(parents=True, exist_ok=True)
+    # 清理旧 assets
+    if assets_dir.is_dir():
+        shutil.rmtree(assets_dir)
+
+    # 复制图片
+    copied_imgs = []
+    if diagrams:
+        assets_dir.mkdir(exist_ok=True)
+        for src in diagrams:
+            dst = assets_dir / src.name
+            shutil.copy2(src, dst)
+            copied_imgs.append(src.name)
+            console.print(f"  [dim]复制: {src.relative_to(repo_path)}[/dim]")
+
+    # ── 目录结构 ──
+    tree_out = ""
+    try:
+        r = subprocess.run(
+            ["find", str(repo_path / "src"), "-type", "d", "-maxdepth", "2"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0:
+            dirs = sorted(r.stdout.strip().split("\n"))
+            tree_lines = []
+            for d in dirs:
+                rel = Path(d).relative_to(repo_path)
+                depth = len(rel.parts) - 1
+                name = rel.parts[-1] if rel.parts else ""
+                tree_lines.append("  " * depth + name + "/")
+            tree_out = "\n".join(tree_lines)
+    except Exception:
+        pass
+
+    # ── docs 目录索引 ──
+    docs_index = []
+    docs_dir = repo_path / "docs"
+    if docs_dir.is_dir():
+        for sub in sorted(docs_dir.iterdir()):
+            if sub.is_dir():
+                count = sum(1 for _ in sub.rglob("*") if _.is_file())
+                docs_index.append(f"- `docs/{sub.name}/` ({count} files)")
+
+    # ── 生成 Markdown ──
+    today = datetime.now().strftime("%Y-%m-%d")
+    home = str(Path.home())
+    path_display = str(repo_path).replace(home, "~")
+
+    md_parts = []
+    # frontmatter
+    lang_tag = info.get("lang", "").lower() or "unknown"
+    md_parts.append(f"""---
+tags:
+  - project
+  - {lang_tag}
+repo: "{path_display}"
+remote: "{info.get('remote_url', '')}"
+created: {today}
+updated: {today}
+---""")
+
+    # 标题
+    title_line = repo_name
+    if readme:
+        for line in readme.split("\n"):
+            if line.startswith("# "):
+                title_line = line[2:].strip()
+                break
+    md_parts.append(f"\n# {title_line}\n")
+
+    # 基本信息表 (callout 样式)
+    branch_extra = f" (+{len(branches) - 1} branches)" if len(branches) > 1 else ""
+    contribs = ", ".join(f"{name}" for name, _ in contributors[:5])
+    status_emoji = "✅" if info["dirty"] == 0 else "🔶"
+    status_text = "干净" if info["dirty"] == 0 else f"{info['dirty']} 未提交变更"
+    md_parts.append(f"""> [!info] 基本信息
+> | 属性 | 值 |
+> |------|------|
+> | 路径 | `{path_display}` |
+> | 远程 | `{info.get('remote_url', '无')}` |
+> | 分支 | `{info['branch']}`{branch_extra} |
+> | 语言 | {lang_str} |
+> | 提交 | **{info['commits']}** commits (本周 {week_n} / 本月 {month_n}) |
+> | 贡献者 | {len(contributors)} ({contribs}) |
+> | 标签 | {len(tags)} tags (latest: {latest_tag}) |
+> | 状态 | {status_emoji} {status_text} |
+""")
+
+    # 项目概述 (用 Obsidian callout)
+    if overview:
+        # 将概述包装为 callout
+        callout_lines = overview.split("\n")
+        callout = "> [!abstract] 项目概述\n" + "\n".join(f"> {l}" for l in callout_lines)
+        md_parts.append(f"{callout}\n")
+
+    # 架构 (限制长度，保留关键信息)
+    if architecture:
+        # 截断过长的架构段，保留前 60 行
+        arch_lines = architecture.split("\n")
+        if len(arch_lines) > 60:
+            # 确保代码块闭合
+            trimmed = arch_lines[:60]
+            open_blocks = sum(1 for l in trimmed if l.strip().startswith("```"))
+            if open_blocks % 2 != 0:
+                trimmed.append("```")
+            trimmed.append(f"\n> *完整架构详见 CLAUDE.md ({len(arch_lines)} 行)*")
+            architecture = "\n".join(trimmed)
+        md_parts.append(f"## 架构\n\n{architecture}\n")
+
+    # 关键图表（使用 Obsidian wikilink 嵌入）
+    if copied_imgs:
+        md_parts.append("## 关键图表\n")
+        for img in copied_imgs:
+            label = img.replace(".png", "").replace("_", " ")
+            md_parts.append(f"### {label}\n\n![[{img}]]\n")
+
+    # 目录结构
+    if tree_out:
+        md_parts.append(f"## 源码结构\n\n```\n{tree_out}\n```\n")
+
+    # 文档索引 (callout)
+    if docs_index:
+        lines = ["> [!folder]- 文档索引"] + [f"> {item}" for item in docs_index]
+        md_parts.append("\n".join(lines) + "\n")
+
+    # 最近活动 (callout, 可折叠)
+    if recent_commits:
+        lines = ["> [!timeline]- 最近活动"]
+        for rel, msg in recent_commits:
+            # 按类型着色提示
+            prefix = "🟢" if msg.startswith("feat") else "🟡" if msg.startswith("fix") else "⚪"
+            lines.append(f"> {prefix} **{rel}** — {msg}")
+        md_parts.append("\n".join(lines) + "\n")
+
+    # 写入
+    doc_path = vault_dir / f"{repo_name}.md"
+    doc_path.write_text("\n".join(md_parts), encoding="utf-8")
+
+    console.print(f"\n[green]✓ 已生成: {doc_path}[/green]")
+    console.print(f"  [dim]{len(copied_imgs)} 张图表 | {len(recent_commits)} 条提交记录[/dim]")
+
+
 GLOBAL_FLAGS = {"--path", "--sort", "--filter", "--json", "--watch"}
 # --sort/--path/--filter/--watch 后面跟一个值
 GLOBAL_FLAGS_WITH_VALUE = {"--path", "--sort", "--filter", "--watch"}
@@ -1145,6 +1875,7 @@ def preprocess_argv(argv: list[str]) -> list[str]:
     subcommands = {
         "dashboard", "activity", "health", "detail", "stats",
         "open", "dirty", "each", "pull", "push", "commit", "stash", "grep",
+        "doc", "graph",
     }
     # 找到子命令位置
     sub_idx = None
@@ -1227,6 +1958,17 @@ def main():
     grep_parser = sub.add_parser("grep", help="跨仓库代码搜索")
     grep_parser.add_argument("pattern", help="搜索模式 (正则)")
 
+    doc_parser = sub.add_parser("doc", help="为仓库生成 Obsidian 项目文档")
+    doc_parser.add_argument("repo", help="仓库名称")
+
+    # GitNexus 图谱分析: cb graph <repo> [action] [keywords]
+    graph_parser = sub.add_parser("graph", help="GitNexus 代码图谱分析")
+    graph_parser.add_argument("repo", help="仓库名称")
+    graph_parser.add_argument("graph_cmd", nargs="?", default="overview",
+                              choices=["index", "query", "deps", "community", "overview"],
+                              help="操作: index|query|deps|community (默认 overview)")
+    graph_parser.add_argument("keywords", nargs="?", default="", help="query 的搜索关键词")
+
     args = parser.parse_args()
 
     cmd = args.command or "dashboard"
@@ -1245,6 +1987,8 @@ def main():
         "commit": cmd_commit,
         "stash": cmd_stash,
         "grep": cmd_grep,
+        "doc": cmd_doc,
+        "graph": cmd_graph,
     }
 
     handler = commands.get(cmd)
