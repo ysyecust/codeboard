@@ -31,8 +31,9 @@ codeboard = "codeboard:main"
 cb = "codeboard:main"
 
 [project.urls]
-Homepage = "https://github.com/shaoyiyang/codeboard"
-Repository = "https://github.com/shaoyiyang/codeboard"
+Homepage = "https://github.com/ysyecust/codeboard"
+Repository = "https://github.com/ysyecust/codeboard"
+Issues = "https://github.com/ysyecust/codeboard/issues"
 
 [tool.setuptools]
 py-modules = ["codeboard"]
