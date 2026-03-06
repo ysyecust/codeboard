@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CodeBoard — Git repository dashboard for your local codebase."""
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 import argparse
 import json

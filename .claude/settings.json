@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "preCommit": [
+      {
+        "command": "python3 .claude/check-version-sync.py",
+        "description": "Check version sync between pyproject.toml and codeboard.py"
+      }
+    ]
+  }
+}
