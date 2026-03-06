@@ -448,7 +448,10 @@ _ui_lang = CFG["lang"]  # "auto", "en", or "zh"
 
 
 def _detect_lang() -> str:
-    loc = locale.getdefaultlocale()[0] or ""
+    try:
+        loc = locale.getlocale()[0] or ""
+    except ValueError:
+        loc = ""
     return "zh" if loc.startswith("zh") else "en"
 
 
