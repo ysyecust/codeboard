@@ -6,18 +6,9 @@
 
 Git repository dashboard for your local codebase. Scans all git repos under a directory and shows status, activity, health — with batch operations and lazygit integration.
 
-```
-╭────────────── CodeBoard ── ~/Code ── 48 repos ──────────────────────────────╮
-│ Name               │ Branch   │ Last Commit │ Status │ Language │ Remote    │
-│ codemaster         │ main     │ 7m ago      │   ●1   │ Python   │ github ↑3 │
-│ managerAgent       │ main     │ 1h ago      │   ●4   │ Python   │ github ↑2 │
-│ quant              │ main     │ 4d ago      │  ●15   │ Python   │ github    │
-│ SEIR               │ main     │ 6d ago      │  ●26   │ Python   │ github    │
-│ scip               │ master   │ 8d ago      │   ●4   │ C/C++    │ github    │
-│ petsc              │ main     │ 1mo ago     │    ✓   │ C        │ github    │
-│ ...                │          │             │        │          │           │
-╰───────────────────────────── ● = uncommitted  ✓ = clean ────────────────────╯
-```
+<p align="center">
+  <img src="docs/dashboard.svg" alt="Dashboard" width="700">
+</p>
 
 ## Features
 
@@ -31,6 +22,16 @@ Git repository dashboard for your local codebase. Scans all git repos under a di
 - **lazygit** — Open repos in lazygit, process dirty repos interactively
 - **Doc** — Generate Obsidian project documentation (optional)
 - **Graph** — Code graph analysis via GitNexus (optional)
+
+<details>
+<summary><b>Health Check</b></summary>
+<p align="center"><img src="docs/health.svg" alt="Health" width="700"></p>
+</details>
+
+<details>
+<summary><b>Activity Timeline</b></summary>
+<p align="center"><img src="docs/activity.svg" alt="Activity" width="700"></p>
+</details>
 
 ## Install
 
