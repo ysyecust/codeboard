@@ -2914,7 +2914,7 @@ def preprocess_argv(argv: list[str]) -> list[str]:
     subcommands = {
         "dashboard", "activity", "health", "detail", "stats",
         "open", "dirty", "each", "pull", "push", "commit", "stash", "grep",
-        "doc", "graph",
+        "doc", "graph", "config", "completions",
     }
     # 找到子命令位置
     sub_idx = None
@@ -2946,6 +2946,97 @@ def preprocess_argv(argv: list[str]) -> list[str]:
             i += 1
 
     return before + [subcmd] + new_after
+
+
+def cmd_completions(args):
+    """Generate shell completion script."""
+    shell = getattr(args, "shell", "bash")
+    _SUBCOMMANDS = "dashboard activity health detail stats open dirty each pull push commit stash grep doc graph config"
+    _GLOBAL_OPTS = "--path --sort --filter --json --watch --lang --no-color --version"
+    _SORT_OPTS = "name activity commits changes"
+    _LANG_OPTS = "auto en zh"
+    _GRAPH_ACTIONS = "index overview query deps community report hierarchy hubs modules"
+    _PANELS = "status branch log stash"
+    _STASH_ACTIONS = "push pop list"
+    if shell == "bash":
+        print(f"""\
+_cb_completions() {{
+    local cur prev subcmd
+    cur="${{COMP_WORDS[COMP_CWORD]}}"
+    prev="${{COMP_WORDS[COMP_CWORD-1]}}"
+    # find subcommand
+    subcmd=""
+    for word in "${{COMP_WORDS[@]:1}}"; do
+        case "$word" in
+            dashboard|activity|health|detail|stats|open|dirty|each|pull|push|commit|stash|grep|doc|graph|config)
+                subcmd="$word"; break ;;
+        esac
+    done
+    case "$prev" in
+        --sort) COMPREPLY=($(compgen -W "{_SORT_OPTS}" -- "$cur")); return ;;
+        --lang) COMPREPLY=($(compgen -W "{_LANG_OPTS}" -- "$cur")); return ;;
+        --path) COMPREPLY=($(compgen -d -- "$cur")); return ;;
+    esac
+    if [[ -z "$subcmd" ]]; then
+        COMPREPLY=($(compgen -W "{_SUBCOMMANDS} {_GLOBAL_OPTS}" -- "$cur"))
+        return
+    fi
+    case "$subcmd" in
+        graph) COMPREPLY=($(compgen -W "{_GRAPH_ACTIONS}" -- "$cur")) ;;
+        open)  COMPREPLY=($(compgen -W "{_PANELS}" -- "$cur")) ;;
+        stash) COMPREPLY=($(compgen -W "{_STASH_ACTIONS}" -- "$cur")) ;;
+        *)     COMPREPLY=($(compgen -W "{_GLOBAL_OPTS}" -- "$cur")) ;;
+    esac
+}}
+complete -F _cb_completions cb codeboard""")
+    elif shell == "zsh":
+        print(f"""\
+#compdef cb codeboard
+_cb() {{
+    local -a subcmds=({_SUBCOMMANDS})
+    local -a global_opts=({_GLOBAL_OPTS})
+    local -a graph_actions=({_GRAPH_ACTIONS})
+    local -a panels=({_PANELS})
+    local -a stash_actions=({_STASH_ACTIONS})
+    local subcmd=""
+    for word in "${{words[@]:1}}"; do
+        if (( $subcmds[(Ie)$word] )); then
+            subcmd="$word"; break
+        fi
+    done
+    if [[ -z "$subcmd" ]]; then
+        _describe 'command' subcmds
+        _describe 'option' global_opts
+        return
+    fi
+    case "$subcmd" in
+        graph) _describe 'action' graph_actions ;;
+        open)  _describe 'panel' panels ;;
+        stash) _describe 'action' stash_actions ;;
+        detail|commit|doc) _files -/ ;;
+        *)     _describe 'option' global_opts ;;
+    esac
+}}
+_cb""")
+    elif shell == "fish":
+        print(f"""\
+# Fish completions for cb/codeboard
+set -l subcmds {_SUBCOMMANDS}
+set -l graph_actions {_GRAPH_ACTIONS}
+complete -c cb -c codeboard -f
+complete -c cb -c codeboard -n "not __fish_seen_subcommand_from $subcmds" -a "$subcmds"
+complete -c cb -c codeboard -l path -r -F
+complete -c cb -c codeboard -l sort -r -a "{_SORT_OPTS}"
+complete -c cb -c codeboard -l filter -r
+complete -c cb -c codeboard -l json
+complete -c cb -c codeboard -l watch -r
+complete -c cb -c codeboard -l lang -r -a "{_LANG_OPTS}"
+complete -c cb -c codeboard -l no-color
+complete -c cb -c codeboard -l version
+complete -c cb -c codeboard -n "__fish_seen_subcommand_from graph" -a "$graph_actions"
+complete -c cb -c codeboard -n "__fish_seen_subcommand_from open" -a "{_PANELS}"
+complete -c cb -c codeboard -n "__fish_seen_subcommand_from stash" -a "{_STASH_ACTIONS}"
+""")
 
 
 def cmd_config(args):
@@ -3024,6 +3115,9 @@ def main():
 
     sub.add_parser("config", help="Show or generate config file")
 
+    comp_parser = sub.add_parser("completions", help="Generate shell completion script")
+    comp_parser.add_argument("shell", nargs="?", default="bash", choices=["bash", "zsh", "fish"], help="Shell type (default: bash)")
+
     args = parser.parse_args()
 
     # Apply --lang and --no-color
@@ -3051,6 +3145,7 @@ def main():
         "doc": cmd_doc,
         "graph": cmd_graph,
         "config": cmd_config,
+        "completions": cmd_completions,
     }
 
     handler = commands.get(cmd)
