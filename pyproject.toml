@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codeboard"
+version = "0.1.0"
+description = "Git repository dashboard for your local codebase"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "Shaoyi Yang" }]
+keywords = ["git", "dashboard", "cli", "repository", "devtools"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Version Control :: Git",
+]
+dependencies = ["rich>=13.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+codeboard = "codeboard:main"
+cb = "codeboard:main"
+
+[project.urls]
+Homepage = "https://github.com/shaoyiyang/codeboard"
+Repository = "https://github.com/shaoyiyang/codeboard"
+
+[tool.setuptools]
+py-modules = ["codeboard"]

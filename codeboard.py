@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""CodeBoard - 本地代码仓库仪表盘"""
+"""CodeBoard — Git repository dashboard for your local codebase."""
+
+__version__ = "0.1.0"
 
 import argparse
 import json
+import locale
 import os
 import shutil
 import signal
 import subprocess
 import sys
 import time
+import tomllib
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -20,16 +24,204 @@ from rich.table import Table
 from rich.text import Text
 from rich import box
 
-console = Console()
+# ── Configuration ──────────────────────────────────────────────────────────────
 
-DEFAULT_CODE_DIR = Path.home() / "Code"
-# 额外单独纳管的仓库路径（不整目录扫描，只加特定仓库）
-EXTRA_REPOS = [
-    Path.home() / "Documents" / "Code" / "EO",
-    Path.home() / "Documents" / "Code" / "SimonaSolver",
-]
-OBSIDIAN_VAULT = Path.home() / "Documents" / "Obsidian Vault"
-GITNEXUS_BIN = str(Path.home() / ".nvm/versions/node/v22.15.1/bin/gitnexus")
+CONFIG_DIR = Path.home() / ".config" / "codeboard"
+CONFIG_FILE = CONFIG_DIR / "config.toml"
+
+_DEFAULT_CONFIG = {
+    "scan_dir": str(Path.home() / "Code"),
+    "extra_repos": [],
+    "lang": "auto",
+    "obsidian_vault": "",
+    "gitnexus_bin": "",
+}
+
+
+def _load_config() -> dict:
+    cfg = dict(_DEFAULT_CONFIG)
+    if CONFIG_FILE.is_file():
+        with open(CONFIG_FILE, "rb") as f:
+            cfg.update(tomllib.load(f))
+    return cfg
+
+
+def _generate_default_config() -> str:
+    return """\
+# CodeBoard configuration
+# See: https://github.com/shaoyiyang/codeboard
+
+# Directory to scan for git repositories
+scan_dir = "~/Code"
+
+# Additional individual repos to include (outside scan_dir)
+extra_repos = []
+
+# UI language: "auto", "en", or "zh"
+lang = "auto"
+
+# Path to Obsidian vault (for 'doc' command, optional)
+# obsidian_vault = "~/Documents/Obsidian Vault"
+
+# Path to gitnexus binary (for 'graph' command, optional)
+# gitnexus_bin = ""
+"""
+
+
+CFG = _load_config()
+
+# Derive globals from config
+DEFAULT_CODE_DIR = Path(CFG["scan_dir"]).expanduser()
+EXTRA_REPOS = [Path(p).expanduser() for p in CFG["extra_repos"]]
+OBSIDIAN_VAULT = Path(CFG["obsidian_vault"]).expanduser() if CFG["obsidian_vault"] else Path.home() / "Documents" / "Obsidian Vault"
+GITNEXUS_BIN = CFG["gitnexus_bin"] or ""
+
+# ── i18n ───────────────────────────────────────────────────────────────────────
+
+_I18N: dict[str, dict[str, str]] = {
+    "en": {
+        # relative time
+        "just_now": "just now", "secs_ago": "{n}s ago", "mins_ago": "{n}m ago",
+        "hours_ago": "{n}h ago", "days_ago": "{n}d ago", "months_ago": "{n}mo ago",
+        "years_ago": "{n}y ago", "no_commits": "no commits",
+        # dashboard
+        "col_name": "Name", "col_branch": "Branch", "col_last_commit": "Last Commit",
+        "col_status": "Status", "col_language": "Language", "col_commits": "Commits",
+        "col_remote": "Remote", "dashboard_sub": "● = uncommitted  ✓ = clean",
+        # activity
+        "col_time": "Time", "col_repo": "Repo", "col_author": "Author", "col_message": "Message",
+        # health
+        "health_dirty": "  ⚠ Uncommitted changes", "health_ahead": "  ⚠ Unpushed commits",
+        "health_behind": "  ⚠ Behind remote", "health_no_remote": "  ○ No remote",
+        "health_inactive": "  ○ Inactive >30d", "health_ok": "  ✓ All clean",
+        # detail
+        "lbl_path": "Path", "lbl_remote": "Remote", "lbl_branch": "Branch", "lbl_tags": "Tags",
+        "lbl_commits": "Commits", "lbl_contribs": "Contributors", "lbl_lang": "Language",
+        "lbl_status": "Status", "lbl_recent": "Recent commits", "lbl_activity": "Activity",
+        "none": "none", "this_week": "this week", "this_month": "this month",
+        # stats
+        "total_repos": "Total repos", "active_30d": "Active(30d)", "has_remote": "Has remote",
+        "total_commits": "Total commits", "lang_dist": "Language distribution",
+        "week_top": "Weekly top", "remote_dist": "Remote distribution",
+        # dirty / each
+        "all_clean": "All repos are clean", "col_changes": "Changes",
+        "dirty_title": "Repos with uncommitted changes ({n})",
+        "dirty_prompt": "Enter number to open with lazygit, Enter to exit",
+        "invalid_num": "Invalid number",
+        "processing_n": "Processing {n} dirty repos one by one",
+        "each_hint": "Close lazygit → next repo, Ctrl+C to exit",
+        "interrupted": "Interrupted", "all_done": "All done",
+        # pull / push
+        "no_remote_repos": "No repos with remote configured",
+        "pull_prep": "Pulling {n} repos with remote",
+        "updated_n": "  ✓ Updated ({n})", "failed_n": "  ✗ Failed ({n})",
+        "up_to_date_n": "  ─ Up to date ({n})",
+        "no_push_needed": "No repos need pushing",
+        "confirm_push": "Confirm push {n} repos above? [y/N]",
+        "cancelled": "Cancelled", "push_done": "Push complete",
+        # commit / stash
+        "missing_msg": "Missing commit message, use -m",
+        "tree_clean": "{name}: working tree clean",
+        "n_changes": "{name} — {n} changed files:",
+        "n_more": "  ... {n} more files",
+        "commit_msg_lbl": "Commit message", "confirm_commit": "Confirm git add -A && commit? [y/N]",
+        "committed": "✓ Committed", "commit_fail": "✗ Commit failed:",
+        "no_stash_needed": "{name}: working tree clean, nothing to stash",
+        "stash_ok": "✓ {name}: stashed {n} changes", "stash_fail": "✗ Stash failed:",
+        "stash_pop_ok": "✓ {name}: stash pop succeeded", "stash_pop_fail": "✗ Stash pop failed:",
+        # grep
+        "no_match": "No matches: {pattern}",
+        # find_repo / require
+        "multi_match": "Multiple matches: {hints}",
+        "match_hint": "Hint: use full path to distinguish",
+        "repo_not_found": "Repo not found: {name}",
+        "lazygit_missing": "lazygit not installed", "gitnexus_missing": "gitnexus not found",
+        "expected_path": "Expected path: {path}",
+        # doc
+        "gen_doc": "Generating doc: {name}", "cannot_scan": "Cannot scan: {name}",
+        "doc_ok": "✓ Generated: {path}", "doc_stats": "{imgs} diagrams | {commits} commit records",
+        "copying": "Copy: {path}",
+        # graph
+        "graph_ok": "✓ Generated: {path}",
+        "graph_stats": "{nodes:,} nodes | {edges:,} edges | {communities} communities | {processes} processes",
+        "xref_added": "  Added cross-reference to {name}.md",
+        # watch
+        "watch_ft": "Refresh every {n}s | Took {t:.1f}s | Ctrl+C to exit",
+    },
+    "zh": {
+        "just_now": "刚刚", "secs_ago": "{n}秒前", "mins_ago": "{n}分钟前",
+        "hours_ago": "{n}小时前", "days_ago": "{n}天前", "months_ago": "{n}月前",
+        "years_ago": "{n}年前", "no_commits": "无提交",
+        "col_name": "名称", "col_branch": "分支", "col_last_commit": "最后提交",
+        "col_status": "状态", "col_language": "语言", "col_commits": "提交数",
+        "col_remote": "远程", "dashboard_sub": "● = 未提交变更  ✓ = 干净",
+        "col_time": "时间", "col_repo": "仓库", "col_author": "作者", "col_message": "提交信息",
+        "health_dirty": "  ⚠ 未提交变更", "health_ahead": "  ⚠ 未推送提交",
+        "health_behind": "  ⚠ 落后远程", "health_no_remote": "  ○ 无远程仓库",
+        "health_inactive": "  ○ 长期未活跃 >30天", "health_ok": "  ✓ 一切正常",
+        "lbl_path": "路径", "lbl_remote": "远程", "lbl_branch": "分支", "lbl_tags": "标签",
+        "lbl_commits": "提交", "lbl_contribs": "贡献者", "lbl_lang": "语言",
+        "lbl_status": "状态", "lbl_recent": "最近提交", "lbl_activity": "活跃度",
+        "none": "无", "this_week": "本周", "this_month": "本月",
+        "total_repos": "总仓库", "active_30d": "活跃(30天)", "has_remote": "有远程",
+        "total_commits": "总提交", "lang_dist": "语言分布",
+        "week_top": "本周活跃 Top", "remote_dist": "远程分布",
+        "all_clean": "所有仓库都是干净的", "col_changes": "变更",
+        "dirty_title": "有未提交变更的仓库 ({n})",
+        "dirty_prompt": "输入序号用 lazygit 打开，直接回车退出",
+        "invalid_num": "无效序号",
+        "processing_n": "逐个处理 {n} 个有变更的仓库",
+        "each_hint": "关闭 lazygit 后自动跳到下一个，Ctrl+C 退出",
+        "interrupted": "已中断", "all_done": "全部处理完毕",
+        "no_remote_repos": "没有配置远程仓库的项目",
+        "pull_prep": "准备 pull {n} 个有远程的仓库",
+        "updated_n": "  ✓ 已更新 ({n})", "failed_n": "  ✗ 失败 ({n})",
+        "up_to_date_n": "  ─ 已是最新 ({n})",
+        "no_push_needed": "没有需要推送的仓库",
+        "confirm_push": "确认推送以上 {n} 个仓库? [y/N]",
+        "cancelled": "已取消", "push_done": "推送完成",
+        "missing_msg": "缺少提交信息，请用 -m 指定",
+        "tree_clean": "{name}: 工作区干净，无需提交",
+        "n_changes": "{name} — {n} 个变更文件:",
+        "n_more": "  ... 还有 {n} 个文件",
+        "commit_msg_lbl": "提交信息", "confirm_commit": "确认 git add -A && commit? [y/N]",
+        "committed": "✓ 已提交", "commit_fail": "✗ 提交失败:",
+        "no_stash_needed": "{name}: 工作区干净，无需 stash",
+        "stash_ok": "✓ {name}: stash 了 {n} 个变更", "stash_fail": "✗ stash 失败:",
+        "stash_pop_ok": "✓ {name}: stash pop 成功", "stash_pop_fail": "✗ stash pop 失败:",
+        "no_match": "未找到匹配: {pattern}",
+        "multi_match": "多个匹配: {hints}",
+        "match_hint": "提示: 用完整路径区分",
+        "repo_not_found": "未找到仓库: {name}",
+        "lazygit_missing": "未安装 lazygit", "gitnexus_missing": "未找到 gitnexus",
+        "expected_path": "期望路径: {path}",
+        "gen_doc": "生成文档: {name}", "cannot_scan": "无法扫描: {name}",
+        "doc_ok": "✓ 已生成: {path}", "doc_stats": "{imgs} 张图表 | {commits} 条提交记录",
+        "copying": "复制: {path}",
+        "graph_ok": "✓ 已生成: {path}",
+        "graph_stats": "{nodes:,} 节点 | {edges:,} 边 | {communities} 社区 | {processes} 流程",
+        "xref_added": "  已添加交叉引用到 {name}.md",
+        "watch_ft": "每 {n}s 刷新 | 耗时 {t:.1f}s | Ctrl+C 退出",
+    },
+}
+
+_ui_lang = CFG["lang"]  # "auto", "en", or "zh"
+
+
+def _detect_lang() -> str:
+    loc = locale.getdefaultlocale()[0] or ""
+    return "zh" if loc.startswith("zh") else "en"
+
+
+def T(key: str, **kw) -> str:
+    """Get translated UI string."""
+    lang = _ui_lang if _ui_lang != "auto" else _detect_lang()
+    table = _I18N.get(lang, _I18N["en"])
+    s = table.get(key, _I18N["en"].get(key, key))
+    return s.format(**kw) if kw else s
+
+
+console = Console()
 
 LANG_MAP = {
     ".py": "Python", ".pyx": "Python", ".pyi": "Python",
@@ -89,30 +281,30 @@ def run_git(repo_path: Path, *args: str, timeout: int = 10) -> str:
 
 
 def relative_time(dt: datetime) -> str:
-    """将 datetime 转换为中文相对时间"""
+    """Convert datetime to human-readable relative time."""
     now = datetime.now(timezone.utc)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     diff = now - dt
     seconds = int(diff.total_seconds())
     if seconds < 0:
-        return "刚刚"
+        return T("just_now")
     if seconds < 60:
-        return f"{seconds}秒前"
+        return T("secs_ago", n=seconds)
     minutes = seconds // 60
     if minutes < 60:
-        return f"{minutes}分钟前"
+        return T("mins_ago", n=minutes)
     hours = minutes // 60
     if hours < 24:
-        return f"{hours}小时前"
+        return T("hours_ago", n=hours)
     days = hours // 24
     if days < 30:
-        return f"{days}天前"
+        return T("days_ago", n=days)
     months = days // 30
     if months < 12:
-        return f"{months}月前"
+        return T("months_ago", n=months)
     years = days // 365
-    return f"{years}年前"
+    return T("years_ago", n=years)
 
 
 def detect_remote_type(url: str) -> str:
@@ -258,7 +450,7 @@ def scan_repo(repo_path: Path, full: bool = False) -> dict | None:
         "path": str(repo_path),
         "branch": branch,
         "last_time": last_time,
-        "last_time_rel": relative_time(last_time) if last_time else "无提交",
+        "last_time_rel": relative_time(last_time) if last_time else T("no_commits"),
         "last_time_ts": last_time.timestamp() if last_time else 0,
         "last_msg": last_msg,
         "dirty": dirty_count,
@@ -323,26 +515,30 @@ def cmd_dashboard(args):
         return
 
     table = Table(box=box.ROUNDED, show_lines=False, padding=(0, 1))
-    table.add_column("名称", style="bold cyan", no_wrap=True, max_width=20)
-    table.add_column("分支", style="magenta", no_wrap=True, max_width=15)
-    table.add_column("最后提交", no_wrap=True, max_width=10)
-    table.add_column("状态", no_wrap=True, justify="center")
-    table.add_column("语言", no_wrap=True, max_width=12)
-    table.add_column("提交数", justify="right")
-    table.add_column("远程", no_wrap=True)
+    table.add_column(T("col_name"), style="bold cyan", no_wrap=True, max_width=20)
+    table.add_column(T("col_branch"), style="magenta", no_wrap=True, max_width=15)
+    table.add_column(T("col_last_commit"), no_wrap=True, max_width=10)
+    table.add_column(T("col_status"), no_wrap=True, justify="center")
+    table.add_column(T("col_language"), no_wrap=True, max_width=12)
+    table.add_column(T("col_commits"), justify="right")
+    table.add_column(T("col_remote"), no_wrap=True)
 
     for r in repos:
-        # 最后提交时间着色
+        # Color based on timestamp, not by parsing the relative time string
         rel = r["last_time_rel"]
-        if r["last_time_ts"] == 0:
-            time_text = Text("无提交", style="dim")
-        elif "小时" in rel or "分钟" in rel or "秒" in rel:
-            time_text = Text(rel, style="green")
-        elif "天" in rel:
-            days = int(rel.replace("天前", ""))
-            time_text = Text(rel, style="green" if days <= 7 else "yellow")
+        ts = r["last_time_ts"]
+        if ts == 0:
+            time_text = Text(T("no_commits"), style="dim")
         else:
-            time_text = Text(rel, style="dim red")
+            age_days = (time.time() - ts) / 86400
+            if age_days < 1:
+                time_text = Text(rel, style="green")
+            elif age_days <= 7:
+                time_text = Text(rel, style="green")
+            elif age_days <= 30:
+                time_text = Text(rel, style="yellow")
+            else:
+                time_text = Text(rel, style="dim red")
 
         # 状态
         if r["dirty"] > 0:
@@ -389,7 +585,7 @@ def cmd_dashboard(args):
         )
 
     title = f"CodeBoard ── {code_dir} ── {len(repos)} repos"
-    panel = Panel(table, title=title, subtitle="● = 未提交变更  ✓ = 干净", border_style="blue")
+    panel = Panel(table, title=title, subtitle=T("dashboard_sub"), border_style="blue")
     console.print(panel)
 
 
@@ -442,10 +638,10 @@ def cmd_activity(args):
         return
 
     table = Table(box=box.SIMPLE, show_header=True, padding=(0, 1))
-    table.add_column("时间", style="dim", no_wrap=True, max_width=10)
-    table.add_column("仓库", style="bold cyan", no_wrap=True, max_width=20)
-    table.add_column("作者", style="magenta", no_wrap=True, max_width=12)
-    table.add_column("提交信息", max_width=60)
+    table.add_column(T("col_time"), style="dim", no_wrap=True, max_width=10)
+    table.add_column(T("col_repo"), style="bold cyan", no_wrap=True, max_width=20)
+    table.add_column(T("col_author"), style="magenta", no_wrap=True, max_width=12)
+    table.add_column(T("col_message"), max_width=60)
 
     for c in all_commits:
         msg = c["message"]
@@ -495,7 +691,7 @@ def cmd_health(args):
         dirty_repos.sort(key=lambda r: r["dirty"], reverse=True)
         items = " | ".join(f"{r['name']} ({r['dirty']})" for r in dirty_repos)
         lines.append(Text.assemble(
-            ("  ⚠ 未提交变更", "bold yellow"),
+            (T("health_dirty"), "bold yellow"),
             (f" ({len(dirty_repos)} repos)\n", "yellow"),
             (f"    {items}\n", ""),
         ))
@@ -503,7 +699,7 @@ def cmd_health(args):
     if ahead_repos:
         items = " | ".join(f"{r['name']} (↑{r['ahead']})" for r in ahead_repos)
         lines.append(Text.assemble(
-            ("  ⚠ 未推送提交", "bold yellow"),
+            (T("health_ahead"), "bold yellow"),
             (f" ({len(ahead_repos)} repos)\n", "yellow"),
             (f"    {items}\n", ""),
         ))
@@ -511,7 +707,7 @@ def cmd_health(args):
     if behind_repos:
         items = " | ".join(f"{r['name']} (↓{r['behind']})" for r in behind_repos)
         lines.append(Text.assemble(
-            ("  ⚠ 落后远程", "bold red"),
+            (T("health_behind"), "bold red"),
             (f" ({len(behind_repos)} repos)\n", "red"),
             (f"    {items}\n", ""),
         ))
@@ -519,7 +715,7 @@ def cmd_health(args):
     if no_remote:
         items = " | ".join(r["name"] for r in no_remote)
         lines.append(Text.assemble(
-            ("  ○ 无远程仓库", "bold dim"),
+            (T("health_no_remote"), "bold dim"),
             (f" ({len(no_remote)} repos)\n", "dim"),
             (f"    {items}\n", ""),
         ))
@@ -527,14 +723,14 @@ def cmd_health(args):
     if inactive:
         items = " | ".join(f"{r['name']} ({r['last_time_rel']})" for r in inactive)
         lines.append(Text.assemble(
-            ("  ○ 长期未活跃 >30天", "bold dim"),
+            (T("health_inactive"), "bold dim"),
             (f" ({len(inactive)} repos)\n", "dim"),
             (f"    {items}\n", ""),
         ))
 
     if clean:
         lines.append(Text.assemble(
-            ("  ✓ 一切正常", "bold green"),
+            (T("health_ok"), "bold green"),
             (f" ({len(clean)} repos)\n", "green"),
         ))
 
@@ -557,7 +753,7 @@ def cmd_detail(args):
 
     info = scan_repo(repo_path, full=True)
     if not info:
-        console.print(f"[red]无法扫描: {repo_name}[/red]")
+        console.print(f"[red]{T('cannot_scan', name=repo_name)}[/red]")
         return
 
     if args.json:
@@ -565,7 +761,6 @@ def cmd_detail(args):
         print(json.dumps(info, ensure_ascii=False, indent=2))
         return
 
-    # 额外详细信息
     branches = run_git(repo_path, "branch", "--list").split("\n")
     branches = [b.strip().lstrip("* ") for b in branches if b.strip()]
     branch_count = len(branches)
@@ -573,7 +768,7 @@ def cmd_detail(args):
     tags = run_git(repo_path, "tag", "--list").split("\n")
     tags = [t for t in tags if t.strip()]
     tag_count = len(tags)
-    latest_tag = tags[-1] if tags else "无"
+    latest_tag = tags[-1] if tags else T("none")
 
     contributors_out = run_git(repo_path, "shortlog", "-sn", "HEAD")
     contributors = []
@@ -624,22 +819,23 @@ def cmd_detail(args):
 
     # 构建输出
     lines = []
-    lines.append(f"  [dim]路径:[/dim]     {repo_path}")
-    lines.append(f"  [dim]远程:[/dim]     {info['remote_url'] or '无'}")
+    lp, lr, lb, lt, lc = T("lbl_path"), T("lbl_remote"), T("lbl_branch"), T("lbl_tags"), T("lbl_commits")
+    lines.append(f"  [dim]{lp}:[/dim]     {repo_path}")
+    lines.append(f"  [dim]{lr}:[/dim]     {info['remote_url'] or T('none')}")
     branch_extra = f" (+ {branch_count - 1} branches)" if branch_count > 1 else ""
-    lines.append(f"  [dim]分支:[/dim]     [magenta]{info['branch']}[/magenta]{branch_extra}")
-    lines.append(f"  [dim]标签:[/dim]     {tag_count} tags (latest: {latest_tag})")
-    lines.append(f"  [dim]提交:[/dim]     {info['commits']} commits")
+    lines.append(f"  [dim]{lb}:[/dim]     [magenta]{info['branch']}[/magenta]{branch_extra}")
+    lines.append(f"  [dim]{lt}:[/dim]     {tag_count} tags (latest: {latest_tag})")
+    lines.append(f"  [dim]{lc}:[/dim]     {info['commits']} commits")
 
     if contributors:
         contribs_str = ", ".join(f"{name}({n})" for name, n in contributors[:5])
-        lines.append(f"  [dim]贡献者:[/dim]   {len(contributors)} ({contribs_str})")
+        lines.append(f"  [dim]{T('lbl_contribs')}:[/dim]   {len(contributors)} ({contribs_str})")
 
     if lang_detail:
         lang_str = " | ".join(
             f"{lang} {count * 100 // total_files}%" for lang, count in lang_detail[:5]
         )
-        lines.append(f"  [dim]语言:[/dim]     {lang_str}")
+        lines.append(f"  [dim]{T('lbl_lang')}:[/dim]     {lang_str}")
 
     status_parts = []
     if unstaged > 0:
@@ -650,21 +846,20 @@ def cmd_detail(args):
         status_parts.append(f"{untracked} untracked")
     if not status_parts:
         status_parts.append("[green]clean[/green]")
-    lines.append(f"  [dim]状态:[/dim]     {', '.join(status_parts)}")
+    lines.append(f"  [dim]{T('lbl_status')}:[/dim]     {', '.join(status_parts)}")
 
     lines.append("")
-    lines.append("  [bold]最近提交:[/bold]")
+    lines.append(f"  [bold]{T('lbl_recent')}:[/bold]")
     for rel, msg in recent_commits:
         if len(msg) > 55:
             msg = msg[:52] + "..."
         lines.append(f"   [dim]{rel:>8}[/dim]  {msg}")
 
     lines.append("")
-    # 活跃度条
     max_bar = 12
     bar_filled = min(max_bar, month_n)
     bar = "█" * bar_filled + "░" * (max_bar - bar_filled)
-    lines.append(f"  [dim]活跃度:[/dim]   {bar} 本周 {week_n} | 本月 {month_n}")
+    lines.append(f"  [dim]{T('lbl_activity')}:[/dim]   {bar} {T('this_week')} {week_n} | {T('this_month')} {month_n}")
 
     content = "\n".join(lines)
     panel = Panel(content, title=f"[bold]{repo_name}[/bold]", border_style="blue")
@@ -715,18 +910,17 @@ def cmd_stats(args):
             week_per_repo[repo["name"]] = n
 
     lines = []
-    lines.append(f"  [bold]总仓库:[/bold] {total}  |  [bold]活跃(30天):[/bold] {active_30}  |  [bold]有远程:[/bold] {has_remote}")
-    lines.append(f"  [bold]总提交:[/bold] {total_commits:,}  |  [bold]本月:[/bold] {month_commits}  |  [bold]本周:[/bold] {week_commits}")
+    lines.append(f"  [bold]{T('total_repos')}:[/bold] {total}  |  [bold]{T('active_30d')}:[/bold] {active_30}  |  [bold]{T('has_remote')}:[/bold] {has_remote}")
+    lines.append(f"  [bold]{T('total_commits')}:[/bold] {total_commits:,}  |  [bold]{T('this_month')}:[/bold] {month_commits}  |  [bold]{T('this_week')}:[/bold] {week_commits}")
     lines.append("")
 
-    # 语言分布
     lang_counter = Counter()
     for r in repos:
         if r["lang"] and r["lang"] != "-":
             lang_counter[r["lang"]] += 1
 
     if lang_counter:
-        lines.append("  [bold]语言分布:[/bold]")
+        lines.append(f"  [bold]{T('lang_dist')}:[/bold]")
         max_count = lang_counter.most_common(1)[0][1]
         bar_width = 20
         for lang, count in lang_counter.most_common(10):
@@ -735,19 +929,17 @@ def cmd_stats(args):
             lines.append(f"   {lang:<12} {bar} {count:>2} repos")
         lines.append("")
 
-    # 本周活跃 Top
     top_week = sorted(week_per_repo.items(), key=lambda x: x[1], reverse=True)
     top_week = [(name, n) for name, n in top_week if n > 0][:8]
     if top_week:
-        lines.append("  [bold]本周活跃 Top:[/bold]")
+        lines.append(f"  [bold]{T('week_top')}:[/bold]")
         items = " | ".join(f"[cyan]{name}[/cyan]({n})" for name, n in top_week)
         lines.append(f"   {items}")
         lines.append("")
 
-    # 远程分布
     remote_counter = Counter(r["remote_type"] for r in repos)
     if remote_counter:
-        lines.append("  [bold]远程分布:[/bold]")
+        lines.append(f"  [bold]{T('remote_dist')}:[/bold]")
         items = " | ".join(f"{k}: {v}" for k, v in remote_counter.most_common())
         lines.append(f"   {items}")
 
@@ -773,27 +965,28 @@ def find_repo(code_dir: Path, name: str) -> Path | None:
         return candidates[0]
     if len(candidates) > 1:
         hints = [f"{c.name} ({c.parent})" for c in candidates]
-        console.print(f"[yellow]多个匹配: {', '.join(hints)}[/yellow]")
-        console.print("[dim]提示: 用完整路径区分，如 cb detail ~/Documents/Code/EO[/dim]")
+        console.print(f"[yellow]{T('multi_match', hints=', '.join(hints))}[/yellow]")
+        console.print(f"[dim]{T('match_hint')}[/dim]")
         return None
-    console.print(f"[red]未找到仓库: {name}[/red]")
+    console.print(f"[red]{T('repo_not_found', name=name)}[/red]")
     return None
 
 
 def require_lazygit() -> str | None:
-    """检查 lazygit 是否可用，返回路径"""
+    """Check if lazygit is available, return path."""
     path = shutil.which("lazygit")
     if not path:
-        console.print("[red]未安装 lazygit[/red]  brew install lazygit")
+        console.print(f"[red]{T('lazygit_missing')}[/red]  brew install lazygit")
     return path
 
 
 def require_gitnexus() -> str | None:
-    """检查 gitnexus 是否可用，返回路径"""
-    path = shutil.which("gitnexus") or (GITNEXUS_BIN if Path(GITNEXUS_BIN).is_file() else None)
+    """Check if gitnexus is available, return path."""
+    path = shutil.which("gitnexus") or (GITNEXUS_BIN if GITNEXUS_BIN and Path(GITNEXUS_BIN).is_file() else None)
     if not path:
-        console.print("[red]未找到 gitnexus[/red]  npm install -g gitnexus")
-        console.print(f"[dim]期望路径: {GITNEXUS_BIN}[/dim]")
+        console.print(f"[red]{T('gitnexus_missing')}[/red]  npm install -g gitnexus")
+        if GITNEXUS_BIN:
+            console.print(f"[dim]{T('expected_path', path=GITNEXUS_BIN)}[/dim]")
     return path
 
 
@@ -846,22 +1039,22 @@ def cmd_dirty(args):
     dirty = sorted([r for r in repos if r["dirty"] > 0], key=lambda r: r["dirty"], reverse=True)
 
     if not dirty:
-        console.print("[green]所有仓库都是干净的[/green]")
+        console.print(f"[green]{T('all_clean')}[/green]")
         return
 
     table = Table(box=box.SIMPLE, show_header=True, padding=(0, 1))
     table.add_column("#", style="dim", justify="right", width=3)
-    table.add_column("仓库", style="bold cyan", no_wrap=True)
-    table.add_column("变更", style="yellow", justify="right")
-    table.add_column("分支", style="magenta")
-    table.add_column("最后提交", style="dim")
+    table.add_column(T("col_repo"), style="bold cyan", no_wrap=True)
+    table.add_column(T("col_changes"), style="yellow", justify="right")
+    table.add_column(T("col_branch"), style="magenta")
+    table.add_column(T("col_last_commit"), style="dim")
 
     for i, r in enumerate(dirty, 1):
         table.add_row(str(i), r["name"], str(r["dirty"]), r["branch"], r["last_time_rel"])
 
-    panel = Panel(table, title=f"有未提交变更的仓库 ({len(dirty)})", border_style="yellow")
+    panel = Panel(table, title=T("dirty_title", n=len(dirty)), border_style="yellow")
     console.print(panel)
-    console.print("[dim]输入序号用 lazygit 打开，直接回车退出[/dim]")
+    console.print(f"[dim]{T('dirty_prompt')}[/dim]")
 
     try:
         choice = input("> ").strip()
@@ -870,7 +1063,7 @@ def cmd_dirty(args):
     if not choice:
         return
     if not choice.isdigit() or int(choice) < 1 or int(choice) > len(dirty):
-        console.print("[red]无效序号[/red]")
+        console.print(f"[red]{T('invalid_num')}[/red]")
         return
 
     repo = dirty[int(choice) - 1]
@@ -879,7 +1072,7 @@ def cmd_dirty(args):
 
 
 def cmd_each(args):
-    """逐个用 lazygit 打开有变更的仓库"""
+    """Process dirty repos one by one with lazygit."""
     lg = require_lazygit()
     if not lg:
         return
@@ -888,20 +1081,20 @@ def cmd_each(args):
     dirty = sorted([r for r in repos if r["dirty"] > 0], key=lambda r: r["dirty"], reverse=True)
 
     if not dirty:
-        console.print("[green]所有仓库都是干净的[/green]")
+        console.print(f"[green]{T('all_clean')}[/green]")
         return
 
-    console.print(f"[bold]逐个处理 {len(dirty)} 个有变更的仓库[/bold]")
-    console.print("[dim]每个仓库关闭 lazygit 后自动跳到下一个，Ctrl+C 退出[/dim]\n")
+    console.print(f"[bold]{T('processing_n', n=len(dirty))}[/bold]")
+    console.print(f"[dim]{T('each_hint')}[/dim]\n")
 
     for i, r in enumerate(dirty, 1):
         console.print(f"[cyan][{i}/{len(dirty)}][/cyan] {r['name']} [yellow](●{r['dirty']})[/yellow]")
         try:
             subprocess.run([lg, "--path", r["path"]])
         except KeyboardInterrupt:
-            console.print("\n[dim]已中断[/dim]")
+            console.print(f"\n[dim]{T('interrupted')}[/dim]")
             return
-    console.print("\n[green]全部处理完毕[/green]")
+    console.print(f"\n[green]{T('all_done')}[/green]")
 
 
 def cmd_pull(args):
@@ -914,11 +1107,11 @@ def cmd_pull(args):
         if args.json:
             print(json.dumps({"ok": [], "skip": [], "fail": []}, indent=2))
         else:
-            console.print("[dim]没有配置远程仓库的项目[/dim]")
+            console.print(f"[dim]{T('no_remote_repos')}[/dim]")
         return
 
     if not args.json:
-        console.print(f"[bold]准备 pull {len(targets)} 个有远程的仓库[/bold]\n")
+        console.print(f"[bold]{T('pull_prep', n=len(targets))}[/bold]\n")
 
     results = {"ok": [], "skip": [], "fail": []}
 
@@ -950,18 +1143,18 @@ def cmd_pull(args):
         return
 
     if results["ok"]:
-        console.print(f"[green]  ✓ 已更新 ({len(results['ok'])})[/green]")
+        console.print(f"[green]{T('updated_n', n=len(results['ok']))}[/green]")
         for r, msg in sorted(results["ok"], key=lambda x: x[0]["name"]):
             console.print(f"    [cyan]{r['name']}[/cyan] {msg}")
 
     if results["fail"]:
-        console.print(f"[red]  ✗ 失败 ({len(results['fail'])})[/red]")
+        console.print(f"[red]{T('failed_n', n=len(results['fail']))}[/red]")
         for r, msg in sorted(results["fail"], key=lambda x: x[0]["name"]):
             console.print(f"    [cyan]{r['name']}[/cyan] [dim]{msg}[/dim]")
 
     skipped = len(results["skip"])
     if skipped:
-        console.print(f"[dim]  ─ 已是最新 ({skipped})[/dim]")
+        console.print(f"[dim]{T('up_to_date_n', n=skipped)}[/dim]")
 
 
 def cmd_push(args):
@@ -971,7 +1164,7 @@ def cmd_push(args):
     targets = [r for r in repos if r["ahead"] > 0]
 
     if not targets:
-        console.print("[green]没有需要推送的仓库[/green]")
+        console.print(f"[green]{T('no_push_needed')}[/green]")
         return
 
     targets.sort(key=lambda r: r["ahead"], reverse=True)
@@ -981,22 +1174,22 @@ def cmd_push(args):
         return
 
     table = Table(box=box.SIMPLE, show_header=True, padding=(0, 1))
-    table.add_column("仓库", style="bold cyan")
-    table.add_column("分支", style="magenta")
-    table.add_column("未推送", style="yellow", justify="right")
-    table.add_column("远程", style="dim")
+    table.add_column(T("col_repo"), style="bold cyan")
+    table.add_column(T("col_branch"), style="magenta")
+    table.add_column("Ahead", style="yellow", justify="right")
+    table.add_column(T("col_remote"), style="dim")
 
     for r in targets:
         table.add_row(r["name"], r["branch"], f"↑{r['ahead']}", r["remote_type"])
 
     console.print(table)
-    console.print(f"\n[bold]确认推送以上 {len(targets)} 个仓库? [y/N][/bold]")
+    console.print(f"\n[bold]{T('confirm_push', n=len(targets))}[/bold]")
     try:
         choice = input("> ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         return
     if choice not in ("y", "yes"):
-        console.print("[dim]已取消[/dim]")
+        console.print(f"[dim]{T('cancelled')}[/dim]")
         return
 
     for r in targets:
@@ -1011,7 +1204,7 @@ def cmd_push(args):
             err = result.stderr.strip().split("\n")[0]
             console.print(f"  [red]✗[/red] {r['name']} [dim]{err}[/dim]")
 
-    console.print("\n[green]推送完成[/green]")
+    console.print(f"\n[green]{T('push_done')}[/green]")
 
 
 def cmd_commit(args):
@@ -1023,17 +1216,16 @@ def cmd_commit(args):
 
     message = args.message
     if not message:
-        console.print("[red]缺少提交信息，请用 -m 指定[/red]")
+        console.print(f"[red]{T('missing_msg')}[/red]")
         return
 
-    # 先看看有什么变更
     status = run_git(repo_path, "status", "--porcelain")
     if not status:
-        console.print(f"[green]{repo_path.name}: 工作区干净，无需提交[/green]")
+        console.print(f"[green]{T('tree_clean', name=repo_path.name)}[/green]")
         return
 
     lines = status.split("\n")
-    console.print(f"[bold]{repo_path.name}[/bold] — {len(lines)} 个变更文件:")
+    console.print(f"[bold]{T('n_changes', name=repo_path.name, n=len(lines))}[/bold]")
     for line in lines[:10]:
         flag = line[:2]
         fname = line[3:]
@@ -1044,29 +1236,28 @@ def cmd_commit(args):
         else:
             console.print(f"  [yellow]~ {fname}[/yellow]")
     if len(lines) > 10:
-        console.print(f"  [dim]... 还有 {len(lines) - 10} 个文件[/dim]")
+        console.print(f"  [dim]{T('n_more', n=len(lines) - 10)}[/dim]")
 
     if not args.yes:
-        console.print(f'\n[bold]提交信息:[/bold] "{message}"')
-        console.print("[bold]确认 git add -A && commit? [y/N][/bold]")
+        console.print(f'\n[bold]{T("commit_msg_lbl")}:[/bold] "{message}"')
+        console.print(f"[bold]{T('confirm_commit')}[/bold]")
         try:
             choice = input("> ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             return
         if choice not in ("y", "yes"):
-            console.print("[dim]已取消[/dim]")
+            console.print(f"[dim]{T('cancelled')}[/dim]")
             return
 
-    # git add -A && git commit
     run_git(repo_path, "add", "-A")
     result = subprocess.run(
         ["git", "-C", str(repo_path), "commit", "-m", message],
         capture_output=True, text=True, timeout=15,
     )
     if result.returncode == 0:
-        console.print(f"[green]✓ 已提交[/green]")
+        console.print(f"[green]{T('committed')}[/green]")
     else:
-        console.print(f"[red]✗ 提交失败:[/red] {result.stderr.strip()}")
+        console.print(f"[red]{T('commit_fail')}[/red] {result.stderr.strip()}")
 
 
 def cmd_stash(args):
@@ -1081,7 +1272,7 @@ def cmd_stash(args):
     if action == "push":
         status = run_git(repo_path, "status", "--porcelain")
         if not status:
-            console.print(f"[green]{repo_path.name}: 工作区干净，无需 stash[/green]")
+            console.print(f"[green]{T('no_stash_needed', name=repo_path.name)}[/green]")
             return
         dirty_n = len(status.split("\n"))
         msg = getattr(args, "message", None)
@@ -1093,9 +1284,9 @@ def cmd_stash(args):
             capture_output=True, text=True, timeout=15,
         )
         if result.returncode == 0:
-            console.print(f"[green]✓ {repo_path.name}: stash 了 {dirty_n} 个变更[/green]")
+            console.print(f"[green]{T('stash_ok', name=repo_path.name, n=dirty_n)}[/green]")
         else:
-            console.print(f"[red]✗ stash 失败:[/red] {result.stderr.strip()}")
+            console.print(f"[red]{T('stash_fail')}[/red] {result.stderr.strip()}")
 
     elif action == "pop":
         result = subprocess.run(
@@ -1103,18 +1294,18 @@ def cmd_stash(args):
             capture_output=True, text=True, timeout=15,
         )
         if result.returncode == 0:
-            console.print(f"[green]✓ {repo_path.name}: stash pop 成功[/green]")
+            console.print(f"[green]{T('stash_pop_ok', name=repo_path.name)}[/green]")
         else:
-            console.print(f"[red]✗ stash pop 失败:[/red] {result.stderr.strip()}")
+            console.print(f"[red]{T('stash_pop_fail')}[/red] {result.stderr.strip()}")
 
     elif action == "list":
         out = run_git(repo_path, "stash", "list")
         if out:
-            console.print(f"[bold]{repo_path.name} stash 列表:[/bold]")
+            console.print(f"[bold]{repo_path.name} stash list:[/bold]")
             for line in out.split("\n"):
                 console.print(f"  {line}")
         else:
-            console.print(f"[dim]{repo_path.name}: 没有 stash[/dim]")
+            console.print(f"[dim]{repo_path.name}: no stash[/dim]")
 
 
 def cmd_grep(args):
@@ -1150,7 +1341,7 @@ def cmd_grep(args):
     all_results.sort(key=lambda x: x[0].lower())
 
     if not all_results:
-        console.print(f"[dim]未找到匹配: {pattern}[/dim]")
+        console.print(f"[dim]{T('no_match', pattern=pattern)}[/dim]")
         return
 
     if args.json:
@@ -1177,9 +1368,9 @@ def cmd_grep(args):
             else:
                 console.print(f"  {line}")
         if len(lines) > 8:
-            console.print(f"  [dim]... 还有 {len(lines) - 8} 条[/dim]")
+            console.print(f"  [dim]... {len(lines) - 8} more[/dim]")
 
-    console.print(f"\n[dim]共 {len(all_results)} 个仓库, {total_matches} 条匹配[/dim]")
+    console.print(f"\n[dim]{len(all_results)} repos, {total_matches} matches[/dim]")
 
 
 # ---------------------------------------------------------------------------
@@ -2176,10 +2367,10 @@ def cmd_graph_report(args):
                 if insert_idx > 0:
                     lines.insert(insert_idx, f"> - {link_text} — GitNexus 代码图谱")
                     main_doc.write_text("\n".join(lines), encoding="utf-8")
-                    console.print(f"  [dim]已添加交叉引用到 {repo_name}.md[/dim]")
+                    console.print(f"  [dim]{T('xref_added', name=repo_name)}[/dim]")
 
-    console.print(f"\n[green]✓ 已生成: {doc_path}[/green]")
-    console.print(f"  [dim]{total_nodes:,} 节点 | {total_edges:,} 边 | {total_communities} 社区 | {n_processes} 流程[/dim]")
+    console.print(f"\n[green]{T('graph_ok', path=str(doc_path))}[/green]")
+    console.print(f"  [dim]{T('graph_stats', nodes=total_nodes, edges=total_edges, communities=total_communities, processes=n_processes)}[/dim]")
 
 
 def cmd_graph(args):
@@ -2278,10 +2469,10 @@ def cmd_doc(args):
     # 扫描仓库信息
     info = scan_repo(repo_path, full=True)
     if not info:
-        console.print(f"[red]无法扫描: {repo_name}[/red]")
+        console.print(f"[red]{T('cannot_scan', name=repo_name)}[/red]")
         return
 
-    console.print(f"[bold]生成文档: {repo_name}[/bold]\n")
+    console.print(f"[bold]{T('gen_doc', name=repo_name)}[/bold]\n")
 
     # ── 收集详细信息 ──
     branches = run_git(repo_path, "branch", "--list").split("\n")
@@ -2364,7 +2555,7 @@ def cmd_doc(args):
             dst = assets_dir / src.name
             shutil.copy2(src, dst)
             copied_imgs.append(src.name)
-            console.print(f"  [dim]复制: {src.relative_to(repo_path)}[/dim]")
+            console.print(f"  [dim]{T('copying', path=str(src.relative_to(repo_path)))}[/dim]")
 
     # ── 目录结构 ──
     tree_out = ""
@@ -2489,13 +2680,12 @@ updated: {today}
     doc_path = vault_dir / f"{repo_name}.md"
     doc_path.write_text("\n".join(md_parts), encoding="utf-8")
 
-    console.print(f"\n[green]✓ 已生成: {doc_path}[/green]")
-    console.print(f"  [dim]{len(copied_imgs)} 张图表 | {len(recent_commits)} 条提交记录[/dim]")
+    console.print(f"\n[green]{T('doc_ok', path=str(doc_path))}[/green]")
+    console.print(f"  [dim]{T('doc_stats', imgs=len(copied_imgs), commits=len(recent_commits))}[/dim]")
 
 
-GLOBAL_FLAGS = {"--path", "--sort", "--filter", "--json", "--watch"}
-# --sort/--path/--filter/--watch 后面跟一个值
-GLOBAL_FLAGS_WITH_VALUE = {"--path", "--sort", "--filter", "--watch"}
+GLOBAL_FLAGS = {"--path", "--sort", "--filter", "--json", "--watch", "--lang", "--no-color"}
+GLOBAL_FLAGS_WITH_VALUE = {"--path", "--sort", "--filter", "--watch", "--lang"}
 
 
 def preprocess_argv(argv: list[str]) -> list[str]:
@@ -2537,68 +2727,89 @@ def preprocess_argv(argv: list[str]) -> list[str]:
     return before + [subcmd] + new_after
 
 
+def cmd_config(args):
+    """Show or generate config file."""
+    if CONFIG_FILE.is_file():
+        console.print(f"[bold]Config:[/bold] {CONFIG_FILE}")
+        console.print(CONFIG_FILE.read_text())
+    else:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        CONFIG_FILE.write_text(_generate_default_config())
+        console.print(f"[green]Generated default config: {CONFIG_FILE}[/green]")
+
+
 def main():
+    global _ui_lang, console
+
     sys.argv[1:] = preprocess_argv(sys.argv[1:])
 
     parser = argparse.ArgumentParser(
         prog="codeboard",
-        description="CodeBoard - 本地代码仓库仪表盘",
+        description="CodeBoard — Git repository dashboard for your local codebase",
     )
-    parser.add_argument("--path", default=str(DEFAULT_CODE_DIR), help="扫描目录 (默认 ~/Code)")
-    parser.add_argument("--sort", choices=["name", "activity", "commits", "changes"], default="activity", help="排序方式")
-    parser.add_argument("--filter", default="", help="按名称过滤")
-    parser.add_argument("--json", action="store_true", help="JSON 输出")
-    parser.add_argument("--watch", type=int, metavar="N", default=0, help="每 N 秒自动刷新")
+    parser.add_argument("-V", "--version", action="version", version=f"codeboard {__version__}")
+    parser.add_argument("--path", default=str(DEFAULT_CODE_DIR), help="Scan directory (default: ~/Code)")
+    parser.add_argument("--sort", choices=["name", "activity", "commits", "changes"], default="activity", help="Sort order")
+    parser.add_argument("--filter", default="", help="Filter repos by name")
+    parser.add_argument("--json", action="store_true", help="JSON output")
+    parser.add_argument("--watch", type=int, metavar="N", default=0, help="Auto-refresh every N seconds")
+    parser.add_argument("--lang", choices=["auto", "en", "zh"], default=None, help="UI language (default: auto)")
+    parser.add_argument("--no-color", action="store_true", help="Disable colored output")
 
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("dashboard", help="主仪表盘 (默认)")
-    sub.add_parser("activity", help="跨仓库活动时间线").add_argument("--limit", type=int, default=30, help="显示条数")
-    sub.add_parser("health", help="健康检查报告")
+    sub.add_parser("dashboard", help="Main dashboard (default)")
+    sub.add_parser("activity", help="Cross-repo commit timeline").add_argument("--limit", type=int, default=30, help="Number of entries")
+    sub.add_parser("health", help="Health check report")
 
-    detail_parser = sub.add_parser("detail", help="单个仓库详情")
-    detail_parser.add_argument("repo", help="仓库名称")
+    detail_parser = sub.add_parser("detail", help="Single repo details")
+    detail_parser.add_argument("repo", help="Repository name")
 
-    sub.add_parser("stats", help="汇总统计")
+    sub.add_parser("stats", help="Summary statistics")
 
-    # lazygit 联动
-    open_parser = sub.add_parser("open", help="用 lazygit 打开仓库")
-    open_parser.add_argument("repo", help="仓库名称")
-    open_parser.add_argument("panel", nargs="?", choices=["status", "branch", "log", "stash"], help="lazygit 聚焦面板")
+    open_parser = sub.add_parser("open", help="Open repo in lazygit")
+    open_parser.add_argument("repo", help="Repository name")
+    open_parser.add_argument("panel", nargs="?", choices=["status", "branch", "log", "stash"], help="lazygit focus panel")
 
-    sub.add_parser("dirty", help="列出脏仓库，选择后用 lazygit 打开")
-    sub.add_parser("each", help="逐个 lazygit 处理所有脏仓库")
+    sub.add_parser("dirty", help="List dirty repos, open with lazygit")
+    sub.add_parser("each", help="Process dirty repos one by one with lazygit")
 
-    # 操作命令
-    sub.add_parser("pull", help="批量 git pull 所有有远程的仓库")
-    sub.add_parser("push", help="推送所有有 ahead 提交的仓库")
+    sub.add_parser("pull", help="Pull all repos with remote")
+    sub.add_parser("push", help="Push all repos with ahead commits")
 
-    commit_parser = sub.add_parser("commit", help="快速 commit 指定仓库")
-    commit_parser.add_argument("repo", help="仓库名称")
-    commit_parser.add_argument("-m", "--message", required=True, help="提交信息")
-    commit_parser.add_argument("-y", "--yes", action="store_true", help="跳过确认")
+    commit_parser = sub.add_parser("commit", help="Quick commit a repo")
+    commit_parser.add_argument("repo", help="Repository name")
+    commit_parser.add_argument("-m", "--message", required=True, help="Commit message")
+    commit_parser.add_argument("-y", "--yes", action="store_true", help="Skip confirmation")
 
-    stash_parser = sub.add_parser("stash", help="快速 stash 指定仓库")
-    stash_parser.add_argument("repo", help="仓库名称")
-    stash_parser.add_argument("action", nargs="?", choices=["push", "pop", "list"], default="push", help="stash 操作 (默认 push)")
-    stash_parser.add_argument("-m", "--message", help="stash 备注")
+    stash_parser = sub.add_parser("stash", help="Quick stash a repo")
+    stash_parser.add_argument("repo", help="Repository name")
+    stash_parser.add_argument("action", nargs="?", choices=["push", "pop", "list"], default="push", help="Stash action (default: push)")
+    stash_parser.add_argument("-m", "--message", help="Stash message")
 
-    grep_parser = sub.add_parser("grep", help="跨仓库代码搜索")
-    grep_parser.add_argument("pattern", help="搜索模式 (正则)")
+    grep_parser = sub.add_parser("grep", help="Search code across repos")
+    grep_parser.add_argument("pattern", help="Search pattern (regex)")
 
-    doc_parser = sub.add_parser("doc", help="为仓库生成 Obsidian 项目文档")
-    doc_parser.add_argument("repo", help="仓库名称")
+    doc_parser = sub.add_parser("doc", help="Generate Obsidian project doc")
+    doc_parser.add_argument("repo", help="Repository name")
 
-    # GitNexus 图谱分析: cb graph <repo> [action] [keywords]
-    graph_parser = sub.add_parser("graph", help="GitNexus 代码图谱分析")
-    graph_parser.add_argument("repo", help="仓库名称")
+    graph_parser = sub.add_parser("graph", help="GitNexus code graph analysis")
+    graph_parser.add_argument("repo", help="Repository name")
     graph_parser.add_argument("graph_cmd", nargs="?", default="overview",
                               choices=["index", "query", "deps", "community", "overview",
                                        "report", "hierarchy", "hubs", "modules"],
-                              help="操作: index|overview|query|deps|community|report|hierarchy|hubs|modules")
-    graph_parser.add_argument("keywords", nargs="?", default="", help="query 的搜索关键词")
+                              help="Action: index|overview|query|deps|community|report|hierarchy|hubs|modules")
+    graph_parser.add_argument("keywords", nargs="?", default="", help="Search keywords for query")
+
+    sub.add_parser("config", help="Show or generate config file")
 
     args = parser.parse_args()
+
+    # Apply --lang and --no-color
+    if args.lang:
+        _ui_lang = args.lang
+    if args.no_color:
+        console = Console(no_color=True, highlight=False)
 
     cmd = args.command or "dashboard"
 
@@ -2618,6 +2829,7 @@ def main():
         "grep": cmd_grep,
         "doc": cmd_doc,
         "graph": cmd_graph,
+        "config": cmd_config,
     }
 
     handler = commands.get(cmd)
@@ -2631,7 +2843,7 @@ def main():
             t0 = time.monotonic()
             handler(args)
             elapsed = time.monotonic() - t0
-            console.print(f"\n[dim]每 {args.watch}s 刷新 | 耗时 {elapsed:.1f}s | Ctrl+C 退出[/dim]")
+            console.print(f"\n[dim]{T('watch_ft', n=args.watch, t=elapsed)}[/dim]")
             time.sleep(args.watch)
     else:
         handler(args)
