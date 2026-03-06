@@ -708,6 +708,9 @@ def scan_repo(repo_path: Path, full: bool = False) -> dict | None:
 
 def list_git_repos(code_dir: Path, filter_kw: str = "") -> list[Path]:
     """列出所有 git 仓库路径（含 EXTRA_REPOS）"""
+    if not code_dir.is_dir():
+        console.print(f"[red]Directory not found: {code_dir}[/red]")
+        return []
     repos = [d for d in code_dir.iterdir() if d.is_dir() and (d / ".git").is_dir()]
     for extra in EXTRA_REPOS:
         if extra.is_dir() and (extra / ".git").is_dir() and extra.parent != code_dir:

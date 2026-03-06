@@ -1,6 +1,23 @@
 # CodeBoard
 
+[![CI](https://github.com/shaoyiyang/codeboard/actions/workflows/ci.yml/badge.svg)](https://github.com/shaoyiyang/codeboard/actions)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 Git repository dashboard for your local codebase. Scans all git repos under a directory and shows status, activity, health — with batch operations and lazygit integration.
+
+```
+╭────────────── CodeBoard ── ~/Code ── 48 repos ──────────────────────────────╮
+│ Name               │ Branch   │ Last Commit │ Status │ Language │ Remote    │
+│ codemaster         │ main     │ 7m ago      │   ●1   │ Python   │ github ↑3 │
+│ managerAgent       │ main     │ 1h ago      │   ●4   │ Python   │ github ↑2 │
+│ quant              │ main     │ 4d ago      │  ●15   │ Python   │ github    │
+│ SEIR               │ main     │ 6d ago      │  ●26   │ Python   │ github    │
+│ scip               │ master   │ 8d ago      │   ●4   │ C/C++    │ github    │
+│ petsc              │ main     │ 1mo ago     │    ✓   │ C        │ github    │
+│ ...                │          │             │        │          │           │
+╰───────────────────────────── ● = uncommitted  ✓ = clean ────────────────────╯
+```
 
 ## Features
 
@@ -190,12 +207,25 @@ cb completions fish > ~/.config/fish/completions/cb.fish
 - [lazygit](https://github.com/jesseduffield/lazygit) (optional, for `open`/`dirty`/`each`)
 - [gitnexus](https://github.com/nicolo-ribaudo/gitnexus) (optional, for `graph`)
 
+**Windows note:** CodeBoard uses `sh -c` for batched git commands. On Windows, this requires [Git for Windows](https://gitforwindows.org/) which includes `sh`. WSL also works.
+
 ## Performance
 
 - Scans 48 repos in ~1 second
 - Single shell call per repo (6-9 git commands batched into one `sh -c`)
 - 8-way parallel scanning via `ThreadPoolExecutor`
 - Lazy language detection (skipped for commands that don't need it)
+
+## Development
+
+```bash
+git clone https://github.com/shaoyiyang/codeboard.git
+cd codeboard
+pip install -e ".[dev]"
+pytest
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## License
 
