@@ -1,197 +1,207 @@
 # CodeBoard
 
-本地代码仓库仪表盘 CLI 工具。扫描 `~/Code` 下所有 git 仓库，展示开发状态、活跃度、健康状况，并提供批量操作与 lazygit 联动能力。
+Git repository dashboard CLI. Scans all git repos under a directory, shows status/activity/health, with batch operations and lazygit integration.
 
-## 项目结构
+## Project Structure
 
 ```
 codemaster/
-  codeboard.py    # 单文件，全部逻辑 (~2010行)
-  CLAUDE.md       # 本文件
+  codeboard.py    # Single file, all logic (~3070 lines)
+  pyproject.toml  # Packaging (setuptools, console_scripts: cb/codeboard)
+  README.md       # English documentation
+  LICENSE         # MIT
+  CLAUDE.md       # This file
 ```
 
-- **语言**: Python 3.14+
-- **依赖**: `rich` (终端美化)，标准库 (`subprocess`, `concurrent.futures`, `argparse`, ...)
-- **外部工具**: `git` (必须), `lazygit` (open/dirty/each 子命令需要), `gitnexus` (graph 子命令需要)
+- **Language**: Python 3.11+
+- **Dependencies**: `rich` (terminal formatting), stdlib (`subprocess`, `concurrent.futures`, `argparse`, `tomllib`, ...)
+- **External tools**: `git` (required), `lazygit` (optional, for open/dirty/each), `gitnexus` (optional, for graph)
 
-## 使用方式
-
-已配置 alias: `cb` = `python3 ~/Code/codemaster/codeboard.py`
-
-### 子命令一览
+## Install & Usage
 
 ```bash
-# ── 查看 ──
-cb                        # 主仪表盘 (默认)，按活跃度排序
-cb activity [--limit N]   # 跨仓库提交时间线，默认 30 条
-cb health                 # 健康检查：未提交/未推送/落后远程/无远程/不活跃
-cb detail <repo>          # 单仓库详情：语言占比/贡献者/标签/活跃度曲线
-cb stats                  # 汇总统计：语言分布/本周Top/远程分布
-cb grep <pattern>         # 跨所有仓库搜索代码内容
-
-# ── 操作 ──
-cb pull                   # 批量 git pull 所有有远程的仓库 (--ff-only)
-cb push                   # 推送所有有 ahead 提交的仓库 (需确认)
-cb commit <repo> -m "msg" # 快速 add+commit 指定仓库 (需确认，-y 跳过)
-cb stash <repo> [push|pop|list] [-m "msg"]  # 快速 stash 操作
-
-# ── lazygit 联动 ──
-cb open <repo> [panel]    # lazygit 打开仓库，panel 可选 status/branch/log/stash
-cb dirty                  # 列出脏仓库，交互选择后 lazygit 打开
-cb each                   # 逐个 lazygit 处理所有脏仓库
-
-# ── GitNexus 代码图谱 ──
-cb graph <repo>                    # 图谱概览：节点/边统计、社区数、Top 调用者
-cb graph <repo> index              # 索引仓库到知识图谱 (首次使用需要)
-cb graph <repo> query <keywords>   # 搜索符号：执行流 + 定义 + 流程符号
-cb graph <repo> deps               # 跨模块依赖图 (文件级 CALLS 边统计)
-cb graph <repo> community          # Leiden 社区结构 (含成员采样)
-cb graph <repo> report             # 生成 Obsidian 代码图谱文档 (Mermaid 图表)
-cb graph <repo> hierarchy          # 类继承树 (终端 Rich Tree)
-cb graph <repo> hubs               # 高引用度符号 (Hub Nodes)
-cb graph <repo> modules            # 模块文件分布 (柱状图)
+pip install .          # installs `cb` and `codeboard` commands
+# or run directly:
+python codeboard.py
 ```
 
-### 通用选项
+### Commands
 
 ```bash
---path <dir>              # 扫描目录，默认 ~/Code
+# ── View ──
+cb                        # Main dashboard (default), sorted by activity
+cb activity [--limit N]   # Cross-repo commit timeline (default 30)
+cb health                 # Health check: uncommitted/unpushed/behind/no-remote/inactive
+cb detail <repo>          # Single repo detail: languages/contributors/tags/activity
+cb stats                  # Aggregate statistics: language dist/weekly top/remote dist
+cb grep <pattern>         # Search code across all repos
+
+# ── Operations ──
+cb pull                   # Batch git pull --ff-only all repos with remote
+cb push                   # Push all repos with ahead commits (requires confirm)
+cb commit <repo> -m "msg" # Quick add+commit (requires confirm, -y to skip)
+cb stash <repo> [push|pop|list] [-m "msg"]  # Quick stash ops
+
+# ── lazygit ──
+cb open <repo> [panel]    # Open in lazygit (panel: status/branch/log/stash)
+cb dirty                  # List dirty repos, select one for lazygit
+cb each                   # Process all dirty repos one by one in lazygit
+
+# ── GitNexus Code Graph ──
+cb graph <repo>                    # Graph overview: nodes/edges/communities/top callers
+cb graph <repo> index              # Index repo into knowledge graph (required first)
+cb graph <repo> query <keywords>   # Search symbols: processes + definitions + symbols
+cb graph <repo> deps               # Cross-module dependency graph (CALLS edges)
+cb graph <repo> community          # Leiden community structure (with member sampling)
+cb graph <repo> report             # Generate Obsidian code graph doc (Mermaid charts)
+cb graph <repo> hierarchy          # Class inheritance tree (Rich Tree)
+cb graph <repo> hubs               # High-reference symbols (Hub Nodes)
+cb graph <repo> modules            # Module file distribution (bar chart)
+
+# ── Other ──
+cb doc <repo>             # Generate Obsidian project documentation
+cb config                 # Show or generate config file
+```
+
+### Global Options
+
+```bash
+--path <dir>              # Scan directory (default: ~/Code or config)
 --sort name|activity|commits|changes
---filter <keyword>        # 按仓库名模糊过滤
---json                    # JSON 输出，方便管道
---watch N                 # 每 N 秒自动刷新，Ctrl+C 退出
+--filter <keyword>        # Filter repos by name
+--json                    # JSON output for piping
+--watch N                 # Auto-refresh every N seconds
+--lang en|zh|auto         # UI language (default: auto-detect)
+--no-color                # Disable colored output
+-V, --version             # Show version
 ```
 
-### 常用组合
+## Architecture
 
-```bash
-cb --filter simona          # 只看 simona 系列
-cb --sort changes           # 按脏文件数排序
-cb activity --limit 50      # 最近 50 条提交
-cb --watch 10               # 10 秒刷新的实时监控
-cb --json | jq '.[]'        # 管道处理
-cb open quant log           # lazygit 直接看 quant 的提交历史
-cb each --filter simona     # 逐个处理 simona 相关脏仓库
-cb grep "TODO" --filter simona  # 在 simona 系列中搜索 TODO
-cb pull                     # 一键拉取所有仓库
-cb push                     # 推送所有有 ahead 的仓库
-cb commit quant -m "feat: xxx" -y  # 快速提交
-cb stash quant              # 暂存 quant 的变更
-cb stash quant pop          # 恢复暂存
-cb graph SEIR               # SEIR 图谱概览
-cb graph SEIR community     # SEIR 社区结构
-cb graph SEIR deps          # SEIR 跨模块调用图
-cb graph SEIR query "dfs evaluate"  # 搜索符号
-```
-
-## 架构设计
-
-### 核心流程
+### Core Flow
 
 ```
-main() → argparse 解析 → handler(args)
-                              ↓
-                    scan_all() 并行扫描
-                    ├── ThreadPoolExecutor(max_workers=8)
-                    └── scan_repo() × N (每仓库 1 次 shell 调用)
-                              ↓
-                    sort_repos() → rich 渲染输出
+main() → argparse → preprocess_argv() → handler(args)
+                                            ↓
+                                  scan_all() parallel scan
+                                  ├── ThreadPoolExecutor(max_workers=8)
+                                  └── scan_repo() × N (1 shell call per repo)
+                                            ↓
+                                  sort_repos() → rich rendering
 ```
 
-### 命令分类
+### i18n System
 
-```
-查看类 (只读)     操作类 (写入)      lazygit 联动    图谱分析
-─────────────     ──────────────     ─────────────   ─────────────
-dashboard         pull               open            graph (overview)
-activity          push               dirty           graph index
-health            commit             each            graph query
-detail            stash                              graph deps
-stats                                                graph community
-grep                                                 graph report
-                                                     graph hierarchy
-                                                     graph hubs
-                                                     graph modules
+```python
+_I18N = {"en": {...}, "zh": {...}}   # 166 keys, flat dict
+_ui_lang = "auto"                     # from config or --lang flag
+T(key, **kw) → str                   # lookup + format
 ```
 
-### 性能关键决策
+- Auto-detects from `locale.getdefaultlocale()`
+- Override with `--lang en|zh` or config `lang = "en"`
+- Covers all CLI output + generated Markdown (doc/graph report)
 
-1. **单次 shell 调用**: `scan_repo()` 用 `SCAN_SCRIPT_BASE/FULL` 把 6-9 条 git 命令合并为 1 个 `sh -c` 调用，通过 `%%TAG%%` 标记解析输出
-2. **8 路并行**: `ThreadPoolExecutor(max_workers=8)` 并行扫描所有仓库
-3. **延迟语言检测**: `full=False` 时跳过 `git ls-files`，health/dirty 等不需要语言信息的命令更快
-4. **43 仓库全量扫描 ~1 秒**
+### Configuration
 
-### 安全设计
+```
+~/.config/codeboard/config.toml
+├── scan_dir = "~/Code"
+├── extra_repos = []
+├── lang = "auto"
+├── obsidian_vault = ""
+└── gitnexus_bin = ""
+```
 
-- `pull` 使用 `--ff-only`，不会产生 merge commit
-- `push` 和 `commit` 默认需要用户确认（commit 可用 `-y` 跳过）
-- `stash` 默认 `--include-untracked`，不会丢失文件
-- 所有写操作都有明确的执行反馈（✓ 成功 / ✗ 失败 + 原因）
+Loaded via `_load_config()` → `CFG` dict at import time. `cb config` generates default.
 
-### 关键函数
+### Command Categories
 
-| 函数 | 作用 |
-|------|------|
-| `scan_repo(path, full)` | 单仓库信息提取，核心函数 |
-| `scan_all(dir, full, filter)` | 并行扫描入口 |
-| `SCAN_SCRIPT_BASE/FULL` | shell 脚本模板，合并 git 调用 |
-| `find_repo(dir, name)` | 仓库名模糊匹配 |
-| `relative_time(dt)` | datetime → 中文相对时间 |
+```
+View (read-only)  Operations (write)  lazygit       Graph Analysis
+──────────────    ────────────────    ──────────    ──────────────
+dashboard         pull                open          graph overview
+activity          push                dirty         graph index
+health            commit              each          graph query
+detail            stash                             graph deps
+stats                                               graph community
+grep                                                graph report
+                                                    graph hierarchy
+                                                    graph hubs
+                                                    graph modules
+```
+
+### Performance
+
+1. **Single shell call**: `scan_repo()` batches 6-9 git commands into 1 `sh -c` call, parsed via `%%TAG%%` markers
+2. **8-way parallel**: `ThreadPoolExecutor(max_workers=8)`
+3. **Lazy language detection**: `full=False` skips `git ls-files`
+4. **~1s for 48 repos**
+
+### Key Functions
+
+| Function | Purpose |
+|----------|---------|
+| `scan_repo(path, full)` | Single repo info extraction, core function |
+| `scan_all(dir, full, filter)` | Parallel scan entry point |
+| `SCAN_SCRIPT_BASE/FULL` | Shell script templates, batched git calls |
+| `find_repo(dir, name)` | Fuzzy repo name matching |
+| `T(key, **kw)` | i18n string lookup |
+| `_load_config()` | TOML config loader |
+| `relative_time(dt)` | datetime → localized relative time |
 | `detect_remote_type(url)` | remote URL → github/gitlab/gitee/... |
-| `LANG_MAP` / `IGNORE_EXTS` | 文件扩展名 → 语言映射 & 忽略列表 |
-| `require_gitnexus()` | 检查 gitnexus 可用性，返回路径 |
-| `run_gitnexus(gn, subcmd, ...)` | gitnexus 子进程调用包装 (输出在 stderr) |
-| `_parse_md_table(raw)` | 解析 gitnexus cypher 返回的 markdown 表格 |
-| `_graph_require(args)` | graph 系列命令的公共前置检查 |
-| `_bar_chart_text(items, max_width)` | 文本柱状图生成 (report 用) |
-| `_module_prefix(filepath)` | 文件路径 → 首段目录名 |
-| `GITNEXUS_BIN` | gitnexus 二进制路径 (nvm 管理) |
+| `require_gitnexus()` | Check gitnexus availability |
+| `run_gitnexus(gn, subcmd, ...)` | gitnexus subprocess wrapper (output on stderr) |
+| `_parse_md_table(raw)` | Parse gitnexus cypher markdown table output |
+| `_graph_require(args)` | Graph commands common prerequisite check |
+| `_bar_chart_text(items)` | Text bar chart generation (for report) |
 
-### scan_repo 返回的 dict 结构
+### scan_repo Return Dict
 
 ```python
 {
-    "name": "quant",              # 文件夹名
-    "path": "/Users/.../quant",   # 绝对路径
-    "branch": "main",             # 当前分支
-    "last_time": datetime,        # 最后提交时间 (datetime 对象)
-    "last_time_rel": "2天前",     # 相对时间 (中文)
-    "last_time_ts": 1771742393.0, # Unix 时间戳 (排序用)
-    "last_msg": "feat: ...",      # 最后提交信息
-    "dirty": 36,                  # 未提交变更文件数
-    "commits": 33,                # 总提交数
+    "name": "quant",              # directory name
+    "path": "/Users/.../quant",   # absolute path
+    "branch": "main",             # current branch
+    "last_time": datetime,        # last commit time
+    "last_time_rel": "2d ago",    # relative time (localized)
+    "last_time_ts": 1771742393.0, # unix timestamp (for sorting)
+    "last_msg": "feat: ...",      # last commit message
+    "dirty": 36,                  # uncommitted file count
+    "commits": 33,                # total commits
     "remote_url": "git@...",      # remote origin URL
     "remote_type": "github",      # github/gitlab/gitee/other/none
-    "ahead": 0,                   # 领先远程提交数
-    "behind": 0,                  # 落后远程提交数
-    "lang": "Python",             # 主要语言 (full=True 时才有)
+    "ahead": 0,                   # commits ahead of remote
+    "behind": 0,                  # commits behind remote
+    "lang": "Python",             # primary language (full=True only)
 }
 ```
 
-## 开发约定
+## Development Conventions
 
-- **单文件原则**: 所有逻辑保持在 `codeboard.py` 一个文件中
-- **无状态**: 不使用缓存、数据库、配置文件，每次运行实时扫描
-- **输出用 rich**: 表格用 `Table`，面板用 `Panel`，着色用 `Text`
-- **新子命令模式**: 写 `cmd_xxx(args)` 函数 → 注册到 `main()` 的 `commands` dict 和 `argparse` 子解析器
-- **写操作需确认**: push/commit 等写操作默认询问用户确认
-- **lazygit 联动**: 用 `os.execvp` 替换当前进程 (open)，用 `subprocess.run` 串行调用 (each)
-- **错误处理**: git 命令超时/失败静默返回空字符串，不中断整体扫描
+- **Single file**: All logic stays in `codeboard.py`
+- **Config**: TOML at `~/.config/codeboard/config.toml`, loaded once at import
+- **i18n**: All user-facing strings use `T(key)`, add keys to both `en` and `zh` in `_I18N`
+- **Output via rich**: Tables → `Table`, panels → `Panel`, coloring → `Text`
+- **New subcommand pattern**: Write `cmd_xxx(args)` → register in `main()` commands dict + argparse subparser
+- **Write ops need confirmation**: push/commit default to asking user
+- **lazygit integration**: `os.execvp` for open, `subprocess.run` for each
+- **Error handling**: git timeout/failure returns empty string silently, doesn't break scan
 
-## 扩展指南
+## Extension Guide
 
-### 添加新子命令
+### Adding a New Subcommand
 
 ```python
-# 1. 写命令函数
+# 1. Write command function
 def cmd_xxx(args):
     code_dir = Path(args.path).expanduser()
     repos = scan_all(code_dir, full=True, filter_kw=args.filter)
-    # ... 逻辑 ...
+    # ... logic ...
 
-# 2. 在 main() 中注册
-xxx_parser = sub.add_parser("xxx", help="描述")
-xxx_parser.add_argument(...)  # 如有额外参数
+# 2. Register in main()
+xxx_parser = sub.add_parser("xxx", help="description")
+xxx_parser.add_argument(...)
 
 commands = {
     ...,
@@ -199,16 +209,27 @@ commands = {
 }
 ```
 
-### 添加新语言检测
+### Adding i18n Strings
 
-在 `LANG_MAP` 字典中加扩展名映射即可:
+```python
+# In _I18N dict, add to BOTH "en" and "zh":
+"en": { ..., "my_key": "English text {n}", },
+"zh": { ..., "my_key": "中文文本 {n}", },
+
+# Use in code:
+console.print(T("my_key", n=42))
+```
+
+### Adding Language Detection
+
+In `LANG_MAP`:
 ```python
 ".hs": "Haskell",
 ```
 
-### 添加新远程类型
+### Adding Remote Type Detection
 
-在 `detect_remote_type()` 中加判断:
+In `detect_remote_type()`:
 ```python
 if "coding.net" in url_lower:
     return "coding"
