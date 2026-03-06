@@ -186,6 +186,37 @@ cb --filter simona health    # also works
 | `cb graph <repo> [action]` | Code graph analysis | [gitnexus](https://github.com/nicolo-ribaudo/gitnexus) |
 | `cb config` | Show or generate config file | — |
 | `cb completions [bash\|zsh\|fish]` | Generate shell completion script | — |
+| `cb mcp` | Run as MCP server for AI assistants | — |
+
+## MCP Server (AI Integration)
+
+CodeBoard can run as an [MCP](https://modelcontextprotocol.io/) server, letting AI assistants (Claude Code, Cursor, etc.) query your repo status directly.
+
+Add to your Claude Code MCP config (`~/.claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "codeboard": {
+      "command": "cb",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Available tools:
+
+| Tool | Description |
+|------|-------------|
+| `list_repos` | Quick list of all repos with name, branch, dirty status |
+| `repo_status` | Full dashboard data (branch, commits, language, remote) |
+| `health_check` | Categorized health report (uncommitted, unpushed, inactive) |
+| `recent_activity` | Cross-repo commit timeline |
+| `repo_detail` | Deep dive into a single repo |
+| `search_code` | Search code across all repos (regex) |
+
+No extra dependencies — uses stdio JSON-RPC 2.0, zero config.
 
 ## Shell Completion
 

@@ -3056,6 +3056,286 @@ def cmd_config(args):
         console.print(f"[green]Generated default config: {CONFIG_FILE}[/green]")
 
 
+# ---------------------------------------------------------------------------
+# MCP Server (Model Context Protocol) — stdio JSON-RPC 2.0
+# ---------------------------------------------------------------------------
+
+_MCP_TOOLS = [
+    {
+        "name": "list_repos",
+        "description": "List all git repositories with basic status (name, path, branch, dirty file count, remote type). Fast, lightweight scan.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "filter": {"type": "string", "description": "Filter repos by name keyword"},
+            },
+        },
+    },
+    {
+        "name": "repo_status",
+        "description": "Full dashboard: all repos with branch, last commit time, dirty count, commit count, language, remote URL, ahead/behind counts. Sorted by recent activity.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "filter": {"type": "string", "description": "Filter repos by name keyword"},
+                "sort": {"type": "string", "enum": ["activity", "name", "commits", "changes"], "description": "Sort order (default: activity)"},
+            },
+        },
+    },
+    {
+        "name": "health_check",
+        "description": "Health report: categorizes repos into uncommitted changes, unpushed commits, behind remote, no remote, inactive >30d, and clean. Great for finding repos that need attention.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "filter": {"type": "string", "description": "Filter repos by name keyword"},
+            },
+        },
+    },
+    {
+        "name": "recent_activity",
+        "description": "Cross-repo commit timeline: recent commits across all repos, sorted by time. Shows repo, author, message, and relative time.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "filter": {"type": "string", "description": "Filter repos by name keyword"},
+                "limit": {"type": "integer", "description": "Max number of commits (default: 30)"},
+            },
+        },
+    },
+    {
+        "name": "repo_detail",
+        "description": "Deep dive into a single repo: languages, contributors, tags, recent commits, branch list, remote info.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "repo": {"type": "string", "description": "Repository name (fuzzy matched)"},
+            },
+            "required": ["repo"],
+        },
+    },
+    {
+        "name": "search_code",
+        "description": "Search code across all repos using git grep (regex). Returns matching file paths and line content per repo.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "Search pattern (regex)"},
+                "filter": {"type": "string", "description": "Filter repos by name keyword"},
+            },
+            "required": ["pattern"],
+        },
+    },
+]
+
+
+def _mcp_handle_tool(name: str, arguments: dict, code_dir: Path) -> str:
+    """Execute an MCP tool and return JSON string result."""
+
+    if name == "list_repos":
+        repos = scan_all(code_dir, full=False, filter_kw=arguments.get("filter", ""))
+        data = [
+            {"name": r["name"], "path": r["path"], "branch": r["branch"],
+             "dirty": r["dirty"], "remote_type": r["remote_type"],
+             "last_commit": r["last_time_rel"]}
+            for r in sort_repos(repos, "activity")
+        ]
+        return json.dumps(data, ensure_ascii=False)
+
+    if name == "repo_status":
+        repos = scan_all(code_dir, full=True, filter_kw=arguments.get("filter", ""))
+        repos = sort_repos(repos, arguments.get("sort", "activity"))
+        for r in repos:
+            r.pop("last_time", None)
+        return json.dumps(repos, ensure_ascii=False)
+
+    if name == "health_check":
+        repos = scan_all(code_dir, full=False, filter_kw=arguments.get("filter", ""))
+        now_ts = datetime.now(timezone.utc).timestamp()
+        categories = {
+            "uncommitted": [],
+            "unpushed": [],
+            "behind": [],
+            "no_remote": [],
+            "inactive_30d": [],
+            "clean": [],
+        }
+        for r in repos:
+            if r["dirty"] > 0:
+                categories["uncommitted"].append({"name": r["name"], "dirty": r["dirty"]})
+            if r["ahead"] > 0:
+                categories["unpushed"].append({"name": r["name"], "ahead": r["ahead"]})
+            if r["behind"] > 0:
+                categories["behind"].append({"name": r["name"], "behind": r["behind"]})
+            if r["remote_type"] == "none":
+                categories["no_remote"].append(r["name"])
+            elif r["last_time_ts"] and (now_ts - r["last_time_ts"]) > 30 * 86400:
+                categories["inactive_30d"].append(r["name"])
+            if r["dirty"] == 0 and r["ahead"] == 0:
+                categories["clean"].append(r["name"])
+        summary = {k: {"count": len(v), "repos": v} for k, v in categories.items()}
+        summary["total_repos"] = len(repos)
+        return json.dumps(summary, ensure_ascii=False)
+
+    if name == "recent_activity":
+        filter_kw = arguments.get("filter", "")
+        limit = arguments.get("limit", 30)
+        repos = list_git_repos(code_dir, filter_kw)
+        all_commits = []
+
+        def _get_commits(repo_path):
+            output = run_git(repo_path, "log", "--all", f"--max-count={limit}", "--format=%aI|%an|%s")
+            if not output:
+                return []
+            entries = []
+            for line in output.split("\n"):
+                if "|" not in line:
+                    continue
+                parts = line.split("|", 2)
+                if len(parts) < 3:
+                    continue
+                try:
+                    dt = datetime.fromisoformat(parts[0])
+                except ValueError:
+                    continue
+                entries.append({
+                    "time": parts[0], "time_rel": relative_time(dt),
+                    "author": parts[1], "message": parts[2],
+                    "repo": repo_path.name,
+                })
+            return entries
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for future in as_completed({pool.submit(_get_commits, r): r for r in repos}):
+                all_commits.extend(future.result())
+
+        all_commits.sort(key=lambda c: c["time"], reverse=True)
+        return json.dumps(all_commits[:limit], ensure_ascii=False)
+
+    if name == "repo_detail":
+        repo_name = arguments.get("repo", "")
+        repo_path = find_repo(code_dir, repo_name)
+        if not repo_path:
+            return json.dumps({"error": f"Repository not found: {repo_name}"})
+        info = scan_repo(repo_path, full=True)
+        if not info:
+            return json.dumps({"error": f"Failed to scan: {repo_name}"})
+        info.pop("last_time", None)
+        # Add extra detail
+        branches = run_git(repo_path, "branch", "--list", "--no-color")
+        info["branches"] = [b.strip().lstrip("* ") for b in branches.split("\n") if b.strip()] if branches else []
+        tags = run_git(repo_path, "tag", "--list", "--sort=-creatordate")
+        info["tags"] = [t.strip() for t in tags.split("\n") if t.strip()][:10] if tags else []
+        recent = run_git(repo_path, "log", "--max-count=10", "--format=%aI|%an|%s")
+        info["recent_commits"] = []
+        if recent:
+            for line in recent.split("\n"):
+                parts = line.split("|", 2)
+                if len(parts) >= 3:
+                    info["recent_commits"].append({"time": parts[0], "author": parts[1], "message": parts[2]})
+        return json.dumps(info, ensure_ascii=False)
+
+    if name == "search_code":
+        pattern = arguments.get("pattern", "")
+        if not pattern:
+            return json.dumps({"error": "pattern is required"})
+        filter_kw = arguments.get("filter", "")
+        repos = list_git_repos(code_dir, filter_kw)
+        results = {}
+
+        def _search(repo_path):
+            try:
+                r = subprocess.run(
+                    ["git", "-C", str(repo_path), "grep", "-n", "--color=never", "-I", pattern],
+                    capture_output=True, text=True, timeout=15,
+                )
+                if r.returncode == 0 and r.stdout.strip():
+                    return (repo_path.name, r.stdout.strip())
+            except subprocess.TimeoutExpired:
+                pass
+            return None
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for future in as_completed({pool.submit(_search, r): r for r in repos}):
+                result = future.result()
+                if result:
+                    repo_name, output = result
+                    matches = []
+                    for line in output.split("\n")[:50]:  # cap at 50 per repo
+                        parts = line.split(":", 2)
+                        if len(parts) >= 3:
+                            matches.append({"file": parts[0], "line": parts[1], "content": parts[2].strip()})
+                        else:
+                            matches.append({"raw": line})
+                    results[repo_name] = matches
+
+        return json.dumps(results, ensure_ascii=False)
+
+    return json.dumps({"error": f"Unknown tool: {name}"})
+
+
+def cmd_mcp(args):
+    """Run as MCP server over stdio (JSON-RPC 2.0)."""
+    code_dir = Path(args.path).expanduser()
+
+    def _respond(msg_id, result):
+        resp = {"jsonrpc": "2.0", "id": msg_id, "result": result}
+        sys.stdout.write(json.dumps(resp) + "\n")
+        sys.stdout.flush()
+
+    def _error(msg_id, code, message):
+        resp = {"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": message}}
+        sys.stdout.write(json.dumps(resp) + "\n")
+        sys.stdout.flush()
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        method = msg.get("method")
+        msg_id = msg.get("id")
+        params = msg.get("params", {})
+
+        # Notifications (no id) — just acknowledge silently
+        if msg_id is None:
+            continue
+
+        if method == "initialize":
+            _respond(msg_id, {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "codeboard", "version": __version__},
+            })
+
+        elif method == "ping":
+            _respond(msg_id, {})
+
+        elif method == "tools/list":
+            _respond(msg_id, {"tools": _MCP_TOOLS})
+
+        elif method == "tools/call":
+            tool_name = params.get("name", "")
+            tool_args = params.get("arguments", {})
+            try:
+                result_text = _mcp_handle_tool(tool_name, tool_args, code_dir)
+                _respond(msg_id, {
+                    "content": [{"type": "text", "text": result_text}],
+                })
+            except Exception as e:
+                _respond(msg_id, {
+                    "content": [{"type": "text", "text": f"Error: {e}"}],
+                    "isError": True,
+                })
+
+        else:
+            _error(msg_id, -32601, f"Method not found: {method}")
+
+
 def main():
     global _ui_lang, console
 
@@ -3124,6 +3404,8 @@ def main():
     comp_parser = sub.add_parser("completions", help="Generate shell completion script")
     comp_parser.add_argument("shell", nargs="?", default="bash", choices=["bash", "zsh", "fish"], help="Shell type (default: bash)")
 
+    sub.add_parser("mcp", help="Run as MCP server (stdio, for AI assistants)")
+
     args = parser.parse_args()
 
     # Apply --lang and --no-color
@@ -3152,6 +3434,7 @@ def main():
         "graph": cmd_graph,
         "config": cmd_config,
         "completions": cmd_completions,
+        "mcp": cmd_mcp,
     }
 
     handler = commands.get(cmd)
