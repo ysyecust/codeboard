@@ -18,6 +18,7 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
     "Topic :: Software Development :: Version Control :: Git",
 ]
@@ -36,3 +37,6 @@ Repository = "https://github.com/shaoyiyang/codeboard"
 
 [tool.setuptools]
 py-modules = ["codeboard"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
