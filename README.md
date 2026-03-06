@@ -167,6 +167,20 @@ cb --filter simona health    # also works
 | `cb doc <repo>` | Generate Obsidian project documentation | Obsidian vault path in config |
 | `cb graph <repo> [action]` | Code graph analysis | [gitnexus](https://github.com/nicolo-ribaudo/gitnexus) |
 | `cb config` | Show or generate config file | — |
+| `cb completions [bash\|zsh\|fish]` | Generate shell completion script | — |
+
+## Shell Completion
+
+```bash
+# Bash (add to ~/.bashrc)
+eval "$(cb completions bash)"
+
+# Zsh (add to ~/.zshrc)
+eval "$(cb completions zsh)"
+
+# Fish (add to ~/.config/fish/completions/)
+cb completions fish > ~/.config/fish/completions/cb.fish
+```
 
 ## Requirements
 
