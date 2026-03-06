@@ -1,0 +1,313 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0d1117"/>
+      <stop offset="50%" style="stop-color:#161b22"/>
+      <stop offset="100%" style="stop-color:#0d1117"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#58a6ff;stop-opacity:0"/>
+      <stop offset="50%" style="stop-color:#58a6ff;stop-opacity:0.15"/>
+      <stop offset="100%" style="stop-color:#58a6ff;stop-opacity:0"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#7ee787"/>
+      <stop offset="50%" style="stop-color:#58a6ff"/>
+      <stop offset="100%" style="stop-color:#bc8cff"/>
+    </linearGradient>
+    <linearGradient id="accent2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#7ee787;stop-opacity:0.6"/>
+      <stop offset="100%" style="stop-color:#58a6ff;stop-opacity:0.6"/>
+    </linearGradient>
+    <filter id="titleGlow">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="softGlow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="bigGlow">
+      <feGaussianBlur stdDeviation="20" result="blur"/>
+      <feComposite in="blur" operator="over"/>
+    </filter>
+    <clipPath id="termClip">
+      <rect x="68" y="195" width="440" height="280" rx="6"/>
+    </clipPath>
+    <clipPath id="term2Clip">
+      <rect x="772" y="195" width="440" height="280" rx="6"/>
+    </clipPath>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1280" height="640" fill="url(#bg)"/>
+
+  <!-- Grid pattern -->
+  <g opacity="0.03">
+    <line x1="0" y1="0" x2="0" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="40" y1="0" x2="40" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="80" y1="0" x2="80" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="120" y1="0" x2="120" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="160" y1="0" x2="160" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="200" y1="0" x2="200" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="240" y1="0" x2="240" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="280" y1="0" x2="280" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="320" y1="0" x2="320" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="360" y1="0" x2="360" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="400" y1="0" x2="400" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="440" y1="0" x2="440" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="480" y1="0" x2="480" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="520" y1="0" x2="520" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="560" y1="0" x2="560" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="600" y1="0" x2="600" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="640" y1="0" x2="640" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="680" y1="0" x2="680" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="720" y1="0" x2="720" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="760" y1="0" x2="760" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="800" y1="0" x2="800" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="840" y1="0" x2="840" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="880" y1="0" x2="880" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="920" y1="0" x2="920" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="960" y1="0" x2="960" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="1000" y1="0" x2="1000" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="1040" y1="0" x2="1040" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="1080" y1="0" x2="1080" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="1120" y1="0" x2="1120" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="1160" y1="0" x2="1160" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="1200" y1="0" x2="1200" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="1240" y1="0" x2="1240" y2="640" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="0" y1="40" x2="1280" y2="40" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="0" y1="80" x2="1280" y2="80" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="0" y1="120" x2="1280" y2="120" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="0" y1="160" x2="1280" y2="160" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="0" y1="200" x2="1280" y2="200" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="0" y1="240" x2="1280" y2="240" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="0" y1="280" x2="1280" y2="280" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="0" y1="320" x2="1280" y2="320" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="0" y1="360" x2="1280" y2="360" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="0" y1="400" x2="1280" y2="400" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="0" y1="440" x2="1280" y2="440" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="0" y1="480" x2="1280" y2="480" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="0" y1="520" x2="1280" y2="520" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="0" y1="560" x2="1280" y2="560" stroke="#58a6ff" stroke-width="1"/>
+    <line x1="0" y1="600" x2="1280" y2="600" stroke="#58a6ff" stroke-width="1"/>
+  </g>
+
+  <!-- Large ambient glow behind center -->
+  <ellipse cx="640" cy="280" rx="400" ry="200" fill="#58a6ff" opacity="0.04" filter="url(#bigGlow)"/>
+
+  <!-- Horizontal glow line -->
+  <rect x="0" y="168" width="1280" height="2" fill="url(#accent)" opacity="0.3"/>
+
+  <!-- ===== LEFT TERMINAL ===== -->
+  <g>
+    <!-- Terminal window -->
+    <rect x="60" y="190" width="456" height="290" rx="10" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
+    <!-- Title bar -->
+    <rect x="60" y="190" width="456" height="32" rx="10" fill="#161b22"/>
+    <rect x="60" y="212" width="456" height="10" fill="#161b22"/>
+    <!-- Traffic lights -->
+    <circle cx="80" cy="206" r="5.5" fill="#f85149"/>
+    <circle cx="98" cy="206" r="5.5" fill="#d29922"/>
+    <circle cx="116" cy="206" r="5.5" fill="#3fb950"/>
+    <!-- Title text -->
+    <text x="288" y="211" font-family="SF Mono,Menlo,monospace" font-size="12" fill="#8b949e" text-anchor="middle">cb — dashboard</text>
+
+    <!-- Terminal content -->
+    <g clip-path="url(#termClip)">
+      <!-- Prompt -->
+      <text x="78" y="244" font-family="SF Mono,Menlo,monospace" font-size="11.5" fill="#8b949e">$</text>
+      <text x="92" y="244" font-family="SF Mono,Menlo,monospace" font-size="11.5" fill="#e6edf3" font-weight="bold">cb</text>
+
+      <!-- Table header -->
+      <text x="78" y="264" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#58a6ff" font-weight="bold">Name</text>
+      <text x="178" y="264" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#58a6ff" font-weight="bold">Branch</text>
+      <text x="268" y="264" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#58a6ff" font-weight="bold">Last</text>
+      <text x="328" y="264" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#58a6ff" font-weight="bold">Status</text>
+      <text x="398" y="264" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#58a6ff" font-weight="bold">Lang</text>
+      <line x1="78" y1="270" x2="490" y2="270" stroke="#30363d" stroke-width="0.5"/>
+
+      <!-- Row 1 -->
+      <text x="78" y="286" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#7ee787">webapp</text>
+      <text x="178" y="286" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#bc8cff">main</text>
+      <text x="268" y="286" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#3fb950">10m</text>
+      <text x="328" y="286" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#f85149" font-weight="bold">●3</text>
+      <text x="398" y="286" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#8b949e">TS</text>
+
+      <!-- Row 2 -->
+      <text x="78" y="304" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#7ee787">ml-core</text>
+      <text x="178" y="304" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#bc8cff">main</text>
+      <text x="268" y="304" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#3fb950">2h</text>
+      <text x="328" y="304" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#3fb950">✓</text>
+      <text x="398" y="304" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#8b949e">Py</text>
+
+      <!-- Row 3 -->
+      <text x="78" y="322" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#7ee787">api-gw</text>
+      <text x="178" y="322" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#bc8cff">dev</text>
+      <text x="268" y="322" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#d29922">3d</text>
+      <text x="328" y="322" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#f85149" font-weight="bold">●12</text>
+      <text x="398" y="322" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#8b949e">Go</text>
+
+      <!-- Row 4 -->
+      <text x="78" y="340" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#7ee787">solver</text>
+      <text x="178" y="340" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#bc8cff">main</text>
+      <text x="268" y="340" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#d29922">5d</text>
+      <text x="328" y="340" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#f85149" font-weight="bold">●7</text>
+      <text x="398" y="340" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#8b949e">C++</text>
+
+      <!-- Row 5 -->
+      <text x="78" y="358" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#7ee787">infra</text>
+      <text x="178" y="358" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#bc8cff">main</text>
+      <text x="268" y="358" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#8b949e">1mo</text>
+      <text x="328" y="358" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#3fb950">✓</text>
+      <text x="398" y="358" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#8b949e">HCL</text>
+
+      <!-- Row 6 -->
+      <text x="78" y="376" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#7ee787">docs</text>
+      <text x="178" y="376" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#bc8cff">main</text>
+      <text x="268" y="376" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#8b949e">2mo</text>
+      <text x="328" y="376" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#3fb950">✓</text>
+      <text x="398" y="376" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#8b949e">MD</text>
+
+      <!-- Row 7 dim -->
+      <text x="78" y="394" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#484f58">mobile</text>
+      <text x="178" y="394" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#484f58">feat</text>
+      <text x="268" y="394" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#484f58">3mo</text>
+      <text x="328" y="394" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#484f58">✓</text>
+      <text x="398" y="394" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#484f58">Swift</text>
+
+      <!-- Summary -->
+      <text x="78" y="420" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#3fb950">4 clean</text>
+      <text x="158" y="420" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#f85149">3 dirty</text>
+      <text x="238" y="420" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#8b949e">48 repos scanned</text>
+
+      <!-- Cursor blink -->
+      <rect x="78" y="434" width="7" height="14" fill="#58a6ff" opacity="0.8">
+        <animate attributeName="opacity" values="0.8;0;0.8" dur="1.2s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+
+    <!-- Terminal shadow -->
+    <rect x="60" y="190" width="456" height="290" rx="10" fill="none" stroke="#58a6ff" stroke-width="0.5" opacity="0.15"/>
+  </g>
+
+  <!-- ===== RIGHT TERMINAL ===== -->
+  <g>
+    <rect x="764" y="190" width="456" height="290" rx="10" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
+    <rect x="764" y="190" width="456" height="32" rx="10" fill="#161b22"/>
+    <rect x="764" y="212" width="456" height="10" fill="#161b22"/>
+    <circle cx="784" cy="206" r="5.5" fill="#f85149"/>
+    <circle cx="802" cy="206" r="5.5" fill="#d29922"/>
+    <circle cx="820" cy="206" r="5.5" fill="#3fb950"/>
+    <text x="992" y="211" font-family="SF Mono,Menlo,monospace" font-size="12" fill="#8b949e" text-anchor="middle">cb — health</text>
+
+    <g clip-path="url(#term2Clip)">
+      <text x="782" y="244" font-family="SF Mono,Menlo,monospace" font-size="11.5" fill="#8b949e">$</text>
+      <text x="796" y="244" font-family="SF Mono,Menlo,monospace" font-size="11.5" fill="#e6edf3" font-weight="bold">cb health</text>
+
+      <!-- Uncommitted -->
+      <text x="782" y="272" font-family="SF Mono,Menlo,monospace" font-size="11" fill="#d29922" font-weight="bold">⚠ Uncommitted changes</text>
+      <text x="1002" y="272" font-family="SF Mono,Menlo,monospace" font-size="11" fill="#8b949e">(12 repos)</text>
+      <text x="796" y="290" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#58a6ff">webapp</text>
+      <text x="866" y="290" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#8b949e">(3) |</text>
+      <text x="910" y="290" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#58a6ff">api-gw</text>
+      <text x="974" y="290" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#8b949e">(12) |</text>
+      <text x="1028" y="290" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#58a6ff">solver</text>
+      <text x="1092" y="290" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#8b949e">(7)</text>
+
+      <!-- Unpushed -->
+      <text x="782" y="318" font-family="SF Mono,Menlo,monospace" font-size="11" fill="#d29922" font-weight="bold">⚠ Unpushed commits</text>
+      <text x="982" y="318" font-family="SF Mono,Menlo,monospace" font-size="11" fill="#8b949e">(3 repos)</text>
+      <text x="796" y="336" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#58a6ff">webapp</text>
+      <text x="866" y="336" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#8b949e">(↑3) |</text>
+      <text x="920" y="336" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#58a6ff">solver</text>
+      <text x="984" y="336" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#8b949e">(↑2)</text>
+
+      <!-- No remote -->
+      <text x="782" y="364" font-family="SF Mono,Menlo,monospace" font-size="11" fill="#484f58">○ No remote</text>
+      <text x="912" y="364" font-family="SF Mono,Menlo,monospace" font-size="11" fill="#484f58">(4 repos)</text>
+
+      <!-- Inactive -->
+      <text x="782" y="388" font-family="SF Mono,Menlo,monospace" font-size="11" fill="#484f58">○ Inactive &gt;30d</text>
+      <text x="942" y="388" font-family="SF Mono,Menlo,monospace" font-size="11" fill="#484f58">(6 repos)</text>
+
+      <!-- Clean -->
+      <text x="782" y="416" font-family="SF Mono,Menlo,monospace" font-size="11" fill="#3fb950" font-weight="bold">✓ All clean</text>
+      <text x="912" y="416" font-family="SF Mono,Menlo,monospace" font-size="11" fill="#8b949e">(23 repos)</text>
+
+      <!-- Cursor -->
+      <rect x="782" y="434" width="7" height="14" fill="#58a6ff" opacity="0.8">
+        <animate attributeName="opacity" values="0.8;0;0.8" dur="1.2s" repeatCount="indefinite" begin="0.6s"/>
+      </rect>
+    </g>
+
+    <rect x="764" y="190" width="456" height="290" rx="10" fill="none" stroke="#58a6ff" stroke-width="0.5" opacity="0.15"/>
+  </g>
+
+  <!-- ===== CENTER TITLE AREA ===== -->
+  <!-- Glow backdrop -->
+  <ellipse cx="640" cy="95" rx="260" ry="60" fill="#58a6ff" opacity="0.06" filter="url(#bigGlow)"/>
+
+  <!-- Git branch icon -->
+  <g transform="translate(470, 48)" fill="none" stroke="url(#accent2)" stroke-width="2.5" stroke-linecap="round" filter="url(#softGlow)">
+    <line x1="12" y1="4" x2="12" y2="28"/>
+    <circle cx="12" cy="4" r="3" fill="#7ee787" stroke="none"/>
+    <circle cx="12" cy="28" r="3" fill="#58a6ff" stroke="none"/>
+    <path d="M12 28 C12 18 26 22 26 12" stroke="url(#accent2)" fill="none"/>
+    <circle cx="26" cy="10" r="3" fill="#bc8cff" stroke="none"/>
+  </g>
+
+  <!-- Title -->
+  <text x="640" y="96" font-family="SF Pro Display,Inter,Helvetica Neue,sans-serif" font-size="72" fill="url(#accent)" text-anchor="middle" font-weight="800" letter-spacing="-2" filter="url(#titleGlow)">CodeBoard</text>
+
+  <!-- Tagline -->
+  <text x="640" y="132" font-family="SF Mono,Menlo,monospace" font-size="17" fill="#8b949e" text-anchor="middle" letter-spacing="0.5">Git dashboard for your entire codebase</text>
+
+  <!-- Badges -->
+  <g transform="translate(452, 148)">
+    <!-- Python badge -->
+    <rect x="0" y="0" width="82" height="22" rx="4" fill="#1f6feb" opacity="0.15" stroke="#58a6ff" stroke-width="0.5"/>
+    <text x="41" y="15" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#58a6ff" text-anchor="middle">Python 3.11+</text>
+    <!-- MIT badge -->
+    <rect x="94" y="0" width="44" height="22" rx="4" fill="#238636" opacity="0.15" stroke="#3fb950" stroke-width="0.5"/>
+    <text x="116" y="15" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#3fb950" text-anchor="middle">MIT</text>
+    <!-- Feature badges -->
+    <rect x="150" y="0" width="64" height="22" rx="4" fill="#8957e5" opacity="0.12" stroke="#bc8cff" stroke-width="0.5"/>
+    <text x="182" y="15" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#bc8cff" text-anchor="middle">lazygit</text>
+    <!-- i18n badge -->
+    <rect x="226" y="0" width="56" height="22" rx="4" fill="#d29922" opacity="0.12" stroke="#d29922" stroke-width="0.5"/>
+    <text x="254" y="15" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#d29922" text-anchor="middle">en / zh</text>
+    <!-- Fast badge -->
+    <rect x="294" y="0" width="82" height="22" rx="4" fill="#238636" opacity="0.12" stroke="#3fb950" stroke-width="0.5"/>
+    <text x="335" y="15" font-family="SF Mono,Menlo,monospace" font-size="10.5" fill="#3fb950" text-anchor="middle">48 repos &lt;1s</text>
+  </g>
+
+  <!-- Bottom prompt line -->
+  <text x="520" y="538" font-family="SF Mono,Menlo,monospace" font-size="15" fill="#484f58">$</text>
+  <text x="540" y="538" font-family="SF Mono,Menlo,monospace" font-size="15" fill="#e6edf3" font-weight="bold">pip install</text>
+  <text x="672" y="538" font-family="SF Mono,Menlo,monospace" font-size="15" fill="#7ee787">codeboard</text>
+
+  <!-- Bottom decoration line -->
+  <rect x="0" y="570" width="1280" height="1" fill="url(#accent)" opacity="0.15"/>
+
+  <!-- GitHub link -->
+  <!-- GitHub icon -->
+  <g transform="translate(545, 580)">
+    <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" fill="#8b949e" transform="scale(0.75)"/>
+  </g>
+  <text x="640" y="597" font-family="SF Mono,Menlo,monospace" font-size="13" fill="#8b949e" text-anchor="middle" letter-spacing="0.3">github.com/ysyecust/codeboard</text>
+
+  <!-- Decorative corner brackets -->
+  <g stroke="#30363d" stroke-width="1.5" fill="none" opacity="0.5">
+    <path d="M20 50 L20 20 L50 20"/>
+    <path d="M1230 20 L1260 20 L1260 50"/>
+    <path d="M1260 590 L1260 620 L1230 620"/>
+    <path d="M50 620 L20 620 L20 590"/>
+  </g>
+</svg>
